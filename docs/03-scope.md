@@ -25,9 +25,10 @@ Phiên bản MVP cần chứng minh được các khả năng chính sau:
 4. Áp dụng quy tắc khớp lệnh Price-Time Priority.
 5. Quản lý Available Balance và Locked Balance.
 6. Ghi nhận mọi thay đổi số dư thông qua Ledger.
-7. Cập nhật Order Book và Trade theo thời gian thực.
+7. Cập nhật Order Book, Recent Trades đã settlement và Balance theo thời gian thực.
 8. Theo dõi nạp/rút token test trên blockchain.
-9. Đóng gói và triển khai hệ thống bằng Docker.
+9. Hỗ trợ chart mặc định từ Binance Reference để học/demo frontend và chart tùy chọn từ Hau CEX Market.
+10. Đóng gói và triển khai hệ thống bằng Docker.
 
 ---
 
@@ -279,7 +280,7 @@ Engine chịu trách nhiệm:
 - Khớp lệnh.
 - Khớp một phần.
 - Khớp toàn phần.
-- Sinh Trade.
+- Sinh `TradeCreated` khi khớp lệnh.
 - Phát sự kiện cập nhật Order.
 - Phát sự kiện cập nhật Order Book.
 - Tạo snapshot.
@@ -306,9 +307,12 @@ Quy tắc ưu tiên:
 
 ### 4.10. Giao dịch đã khớp
 
-Khi hai Order được khớp, hệ thống tạo Trade.
+Khi hai Order được khớp, Matching Engine phát `TradeCreated`.
 
-Trade bao gồm:
+`TradeCreated` chưa được xem là Trade công khai của Hau CEX cho đến khi Trade Settlement Consumer
+xử lý thành công và transaction PostgreSQL đã commit.
+
+Payload TradeCreated hoặc Trade sau settlement bao gồm:
 
 - Trading Pair.
 - Buy Order.
@@ -324,7 +328,7 @@ Trade bao gồm:
 - Thời điểm giao dịch.
 - Sequence.
 
-Sau khi Trade được tạo, hệ thống phải:
+Sau khi `TradeCreated` được settlement thành công, hệ thống phải:
 
 1. Cập nhật Filled Quantity của hai Order.
 2. Cập nhật Remaining Quantity.
@@ -333,7 +337,9 @@ Sau khi Trade được tạo, hệ thống phải:
 5. Cộng tài sản nhận được.
 6. Thu Trading Fee.
 7. Ghi Ledger Entry.
-8. Gửi sự kiện realtime.
+8. Gửi sự kiện realtime sau khi transaction commit.
+
+`TradeCreated` chưa settlement không được dùng để cập nhật Recent Trades, Last Price hoặc Hau Chart.
 
 ### 4.11. Phí giao dịch
 
@@ -373,16 +379,51 @@ Không hiển thị:
 
 ### 4.13. Dữ liệu thị trường
 
-MVP hỗ trợ:
+MVP hỗ trợ Market Data nội bộ của Hau CEX:
 
-- Last Price.
+- Last Price nội bộ.
 - Best Bid.
 - Best Ask.
 - High Price.
 - Low Price.
 - Trading Volume.
+- Recent Trades đã settlement.
+- Candlestick nội bộ của Hau CEX.
+
+Order Book luôn lấy từ Order Book runtime của Hau CEX Matching Engine.
+Recent Trades và Last Price nội bộ luôn lấy từ Trade đã settlement trên Hau CEX.
+High Price, Low Price và Trading Volume nội bộ cũng chỉ được tính từ Trade đã settlement.
+
+MVP hỗ trợ hai nguồn Candlestick:
+
+| Nguồn | Ý nghĩa |
+| --- | --- |
+| `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài, dùng làm nguồn chart mặc định để học/demo frontend. |
+| `HAU` | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
+
+Frontend có thể lưu lựa chọn Chart Source gần nhất của User.
+Tuy nhiên, việc đổi Chart Source không được làm thay đổi:
+
+- Order Book.
 - Recent Trades.
-- Candlestick.
+- Last Price nội bộ.
+- Order destination.
+- Nơi xử lý Place Order và Cancel Order.
+
+Frontend phải hiển thị rõ nguồn biểu đồ hiện tại, ví dụ:
+
+```text
+BTC/USDT · Binance Reference
+BTC/USDT · Hau CEX Market
+```
+
+Không được hiển thị dữ liệu Binance dưới nhãn Hau CEX hoặc dữ liệu Hau CEX dưới nhãn Binance.
+
+Dữ liệu Binance không được dùng để khớp Order, xác định Execution Price, settlement Trade,
+cập nhật Wallet, ghi Ledger, tạo Recent Trades hoặc tạo Order Book của Hau CEX.
+
+Trong MVP, mục đích chính của nguồn `BINANCE` là giúp frontend có dữ liệu chart đủ đẹp và liên tục
+để học cách xây dựng trải nghiệm giao dịch giống sàn thật.
 
 Các khung thời gian dự kiến:
 
@@ -410,9 +451,9 @@ Frontend nhận dữ liệu realtime qua WebSocket.
 Các loại dữ liệu công khai:
 
 - Order Book Update.
-- Recent Trade.
+- Recent Trade đã settlement.
 - Ticker Update.
-- Candlestick Update.
+- Candlestick Update theo đúng Chart Source.
 
 Các loại dữ liệu riêng tư:
 
@@ -546,7 +587,7 @@ Audit Log không được chỉnh sửa thông qua giao diện thông thường.
 - Trang đăng ký.
 - Danh sách thị trường.
 - Trang giao dịch.
-- Chart.
+- Chart có lựa chọn nguồn và nhãn nguồn dữ liệu.
 - Order Book.
 - Recent Trades.
 
@@ -629,6 +670,9 @@ Audit Log không được chỉnh sửa thông qua giao diện thông thường.
 - Không settlement một Trade hai lần.
 - Không hủy một Order nhiều lần.
 - Không xử lý một Engine Event nhiều lần.
+- Không công bố `TradeCreated` chưa settlement vào Recent Trades hoặc Hau Chart.
+- Không dùng dữ liệu Binance cho matching, settlement, Wallet hoặc Ledger.
+- Không hiển thị sai nhãn nguồn biểu đồ.
 - Tổng biến động Ledger phải giải thích được Wallet Balance.
 
 ### 7.2. Tính nhất quán
@@ -769,11 +813,12 @@ MVP được xem là hoàn thành khi đáp ứng được luồng sau:
 - User A đặt Sell Order.
 - User B đặt Buy Order có giá phù hợp.
 - Go Matching Engine khớp hai Order.
-- Hệ thống tạo Trade.
-- Hệ thống cập nhật trạng thái Order.
-- Hệ thống cập nhật Wallet và Ledger.
-- Frontend hiển thị Trade mới.
+- Matching Engine phát `TradeCreated`.
+- Trade Settlement Consumer settlement thành công.
+- Hệ thống cập nhật trạng thái Order, Wallet và Ledger trong transaction.
+- Frontend hiển thị Trade đã settlement mới sau khi transaction commit.
 - Order Book được cập nhật realtime.
+- Chart mặc định hiển thị Binance Reference để demo frontend nhưng Order Book và Recent Trades vẫn thuộc Hau CEX.
 
 ### 10.2. Luồng hủy lệnh
 
@@ -829,6 +874,7 @@ MVP được xem là hoàn thành khi đáp ứng được luồng sau:
 #### Should Have
 
 - Candlestick Chart.
+- Chart Source mặc định Binance Reference phục vụ demo frontend và tùy chọn Hau CEX Market.
 - Maker/Taker Fee.
 - Engine Snapshot.
 - Engine Recovery.

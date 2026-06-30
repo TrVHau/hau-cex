@@ -81,7 +81,7 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 |   7 | Mức giá               | Price Level         | Nhóm các Order có cùng giá trong Order Book.                                    |
 |   8 | Ưu tiên giá-thời gian | Price-Time Priority | Quy tắc ưu tiên giá tốt hơn; nếu cùng giá thì Order vào trước được xử lý trước. |
 |   9 | Lệnh khớp             | Match               | Kết quả khi một Buy Order và một Sell Order có điều kiện giá phù hợp.           |
-|  10 | Giao dịch             | Trade               | Bản ghi sinh ra từ một lần khớp giữa Buy Order và Sell Order.                   |
+|  10 | Giao dịch             | Trade               | Kết quả matching giữa Buy Order và Sell Order; chỉ trở thành Trade bền vững sau settlement. |
 |  11 | Snapshot              | Order Book Snapshot | Bản chụp trạng thái Order Book tại một thời điểm để hỗ trợ khôi phục engine.    |
 |  12 | Phục hồi              | Recovery            | Quá trình tái tạo trạng thái Order Book sau khi engine khởi động lại.           |
 
@@ -89,23 +89,26 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 
 | STT | Thuật ngữ                    | Tên trong hệ thống          | Định nghĩa                                                                           |
 | --: | ---------------------------- | --------------------------- | ------------------------------------------------------------------------------------ |
-|   1 | Giao dịch đã khớp            | Trade                       | Kết quả mua bán thành công giữa hai Order.                                           |
-|   2 | Giá khớp                     | Execution Price             | Giá thực tế được sử dụng khi tạo Trade.                                              |
-|   3 | Khối lượng khớp              | Executed Quantity           | Số Base Asset được trao đổi trong một Trade.                                         |
-|   4 | Phí giao dịch                | Trading Fee                 | Khoản phí được tính cho buyer, seller, maker hoặc taker.                             |
-|   5 | Giao dịch gần nhất           | Recent Trades               | Danh sách Trade mới nhất của một Trading Pair.                                       |
-|   6 | Giá cuối                     | Last Price                  | Giá của Trade gần nhất.                                                              |
-|   7 | Khối lượng giao dịch         | Trading Volume              | Tổng khối lượng đã giao dịch trong một khoảng thời gian.                             |
-|   8 | Nến giá                      | Candlestick                 | Dữ liệu gồm open, high, low, close và volume trong một khoảng thời gian.             |
-|   9 | Giá mở cửa                   | Open Price                  | Giá của Trade đầu tiên trong một cây nến.                                            |
-|  10 | Giá cao nhất                 | High Price                  | Giá cao nhất trong khoảng thời gian của cây nến.                                     |
-|  11 | Giá thấp nhất                | Low Price                   | Giá thấp nhất trong khoảng thời gian của cây nến.                                    |
-|  12 | Giá đóng cửa                 | Close Price                 | Giá của Trade cuối cùng trong một cây nến.                                           |
-|  13 | Ticker                       | Market Ticker               | Dữ liệu tóm tắt thị trường như last price, volume, high, low và phần trăm biến động. |
-|  14 | Biểu đồ tham chiếu           | Reference Chart             | Biểu đồ lấy từ nguồn bên ngoài như Binance, chỉ dùng để tham khảo.                   |
-|  15 | Giá tham chiếu               | Reference Price             | Giá lấy từ nguồn bên ngoài, không dùng để khớp lệnh hoặc settlement.                 |
-|  16 | Dữ liệu thị trường tham chiếu | Reference Market Data       | Dữ liệu thị trường từ nguồn ngoài, tách biệt với Trade và Order Book của Hau CEX.    |
-|  17 | Bộ lấy dữ liệu tham chiếu    | Reference Market Data Adapter | Service lấy và cache Reference Market Data từ nguồn bên ngoài.                       |
+|   1 | Giao dịch đã settlement       | Settled Trade               | Trade đã được ghi nhận thành công sau settlement và transaction PostgreSQL đã commit. |
+|   2 | Giá khớp                      | Execution Price             | Giá thực tế được sử dụng khi tạo Trade.                                              |
+|   3 | Khối lượng khớp               | Executed Quantity           | Số Base Asset được trao đổi trong một Trade.                                         |
+|   4 | Phí giao dịch                 | Trading Fee                 | Khoản phí được tính cho buyer, seller, maker hoặc taker.                             |
+|   5 | Giao dịch gần nhất            | Recent Trades               | Danh sách Trade đã settlement mới nhất của một Trading Pair trên Hau CEX.            |
+|   6 | Giá cuối nội bộ               | Internal Last Price         | Execution Price của Trade đã settlement gần nhất theo Sequence trên Hau CEX.         |
+|   7 | Khối lượng giao dịch          | Trading Volume              | Tổng khối lượng đã giao dịch trong một khoảng thời gian.                             |
+|   8 | Nến giá                       | Candlestick                 | Dữ liệu gồm open, high, low, close và volume; với nguồn `HAU` chỉ dùng Trade đã settlement. |
+|   9 | Giá mở cửa                    | Open Price                  | Giá đầu tiên trong một cây nến.                                                      |
+|  10 | Giá cao nhất                  | High Price                  | Giá cao nhất trong khoảng thời gian của cây nến.                                     |
+|  11 | Giá thấp nhất                 | Low Price                   | Giá thấp nhất trong khoảng thời gian của cây nến.                                    |
+|  12 | Giá đóng cửa                  | Close Price                 | Giá cuối cùng trong một cây nến.                                                     |
+|  13 | Ticker                        | Market Ticker               | Dữ liệu tóm tắt thị trường như last price, volume, high, low và phần trăm biến động. |
+|  14 | Nguồn biểu đồ                 | Chart Source                | Nguồn dữ liệu dùng để hiển thị Candlestick, gồm `BINANCE` hoặc `HAU`.                |
+|  15 | Biểu đồ Binance Reference     | Binance Reference Chart     | Biểu đồ lấy từ Binance, là Reference Market Data và chỉ dùng để tham khảo.           |
+|  16 | Biểu đồ Hau CEX Market        | Hau CEX Market Chart        | Biểu đồ nội bộ được tổng hợp từ Trade đã settlement trên Hau CEX.                    |
+|  17 | Giá tham chiếu                | Reference Price             | Giá lấy từ nguồn bên ngoài, không dùng để khớp lệnh hoặc settlement.                 |
+|  18 | Dữ liệu thị trường tham chiếu | Reference Market Data       | Dữ liệu thị trường từ nguồn ngoài, tách biệt với Trade và Order Book của Hau CEX.    |
+|  19 | Worker dữ liệu tham chiếu     | Reference Market Data Worker | Process lấy và cache Reference Market Data từ nguồn bên ngoài như Binance.           |
+|  20 | Nhãn nguồn biểu đồ            | Chart Source Label          | Nhãn frontend hiển thị nguồn chart, ví dụ `BTC/USDT · Binance Reference`.            |
 
 ## 8. Thuật ngữ về nạp và rút
 
@@ -178,14 +181,14 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 |   2 | WebSocket          | WebSocket            | Kết nối hai chiều dùng để truyền dữ liệu realtime.                           |
 |   3 | WebSocket Room     | Room                 | Nhóm kết nối cùng đăng ký nhận dữ liệu của một market hoặc user.             |
 |   4 | Order Book Update  | `orderbook.update`   | Event realtime thông báo thay đổi của Order Book.                            |
-|   5 | Trade Created      | `trade.created`      | Event realtime thông báo có Trade mới.                                       |
+|   5 | Trade Created      | `trade.created`      | Event realtime công khai cho Trade đã settlement; khác với `TradeCreated` chưa settlement từ Matching Engine. |
 |   6 | Ticker Update      | `ticker.update`      | Event realtime thông báo dữ liệu Ticker thay đổi.                            |
-|   7 | Candlestick Update | `candlestick.update` | Event realtime thông báo dữ liệu nến giá thay đổi.                           |
+|   7 | Candlestick Update | `candlestick.update` | Event realtime thông báo dữ liệu nến giá thay đổi, phải đi kèm hoặc xác định được Chart Source. |
 |   8 | Order Updated      | `order.updated`      | Event riêng cho user thông báo trạng thái Order thay đổi.                    |
 |   9 | Balance Updated    | `balance.updated`    | Event riêng cho user thông báo số dư thay đổi.                               |
 |  10 | Deposit Updated    | `deposit.updated`    | Event riêng cho user thông báo trạng thái Deposit thay đổi.                  |
 |  11 | Withdrawal Updated | `withdrawal.updated` | Event riêng cho user thông báo trạng thái Withdrawal thay đổi.               |
-|  12 | Market Data        | Market Data          | Dữ liệu công khai như order book, recent trades, ticker và candlestick.      |
+|  12 | Market Data        | Market Data          | Dữ liệu công khai của Hau CEX như Order Book, Recent Trades, Ticker và Hau Candlestick. |
 
 ## 13. Quy ước số liệu
 

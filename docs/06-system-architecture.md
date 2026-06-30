@@ -22,8 +22,8 @@ Hau CEX là hệ thống mô phỏng sàn giao dịch tài sản số tập trun
 - Limit Buy và Limit Sell.
 - Matching Engine viết bằng Go.
 - Wallet nội bộ và Ledger.
-- Realtime Order Book, Trade và Balance.
-- Biểu đồ tham chiếu mặc định từ Binance và biểu đồ nội bộ tùy chọn từ Hau CEX.
+- Realtime Order Book, Recent Trades đã settlement và Balance.
+- Biểu đồ tham chiếu mặc định từ Binance để học/demo frontend và biểu đồ nội bộ tùy chọn từ Hau CEX.
 - Deposit và Withdrawal token ERC-20 trên EVM testnet.
 - Quản trị User, Asset, Trading Pair và Withdrawal.
 
@@ -181,7 +181,10 @@ flowchart TB
 - Hiển thị giao diện người dùng.
 - Gọi REST API.
 - Kết nối WebSocket.
-- Hiển thị Market, Order Book, Recent Trades, Candlestick nội bộ và chart tham chiếu.
+- Hiển thị Market, Order Book và Recent Trades của Hau CEX.
+- Hiển thị chart với hai nguồn `BINANCE` và `HAU`.
+- Mặc định hiển thị `BINANCE` như Binance Reference.
+- Hiển thị rõ nhãn nguồn chart, ví dụ `BTC/USDT · Binance Reference` hoặc `BTC/USDT · Hau CEX Market`.
 - Cho phép User đặt và hủy Order.
 - Cho phép User nạp và rút Asset.
 - Cung cấp trang quản trị cho Admin.
@@ -362,8 +365,8 @@ Outbox Worker giải quyết vấn đề cập nhật database và gửi message
 #### Trách nhiệm
 
 - Nhận Trade đã settlement.
-- Cập nhật Last Price.
-- Cập nhật Recent Trades.
+- Cập nhật Last Price nội bộ.
+- Cập nhật Recent Trades đã settlement.
 - Cập nhật Ticker.
 - Tổng hợp Candlestick nội bộ của Hau CEX.
 - Phát public WebSocket event.
@@ -372,27 +375,57 @@ Outbox Worker giải quyết vấn đề cập nhật database và gửi message
 
 Market Data chỉ sử dụng Trade đã settlement thành công.
 
-Không công bố Trade chỉ mới được Matching Engine tạo nhưng chưa được ghi nhận trong PostgreSQL.
+Không công bố `TradeCreated` chỉ mới được Matching Engine tạo nhưng chưa được settlement và ghi nhận trong PostgreSQL.
 
-#### Biểu đồ tham chiếu Binance
+#### Hai nguồn biểu đồ
 
-Biểu đồ mặc định trên frontend có thể dùng dữ liệu Binance để làm chart tham chiếu.
+Hệ thống hỗ trợ hai nguồn Candlestick:
 
-Dữ liệu này được xử lý bởi Reference Market Data Adapter và chỉ dùng để:
+| Nguồn | Ý nghĩa |
+| --- | --- |
+| `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài, lấy qua Reference Market Data Adapter/Worker để học/demo frontend chart. |
+| `HAU` | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
 
-- Hiển thị chart tham chiếu.
+Nguồn chart mặc định khi User mở trang giao dịch lần đầu là `BINANCE`.
+Frontend có thể lưu lựa chọn Chart Source gần nhất của User.
+Mục đích chính của `BINANCE` trong MVP là giúp frontend có dữ liệu chart đủ đẹp và liên tục
+để học cách xây dựng trải nghiệm giao dịch giống sàn thật.
+
+Việc đổi Chart Source không được làm thay đổi:
+
+- Order Book.
+- Recent Trades.
+- Last Price nội bộ.
+- Order destination.
+- Nơi xử lý Place Order và Cancel Order.
+
+Dữ liệu Binance chỉ được dùng để:
+
+- Hiển thị chart tham chiếu/demo.
 - Hiển thị giá tham chiếu.
-- Gợi ý bối cảnh thị trường cho User.
+- Kiểm thử trải nghiệm frontend khi chart có dữ liệu liên tục.
 
 Dữ liệu Binance không được dùng để:
 
-- Quyết định khớp lệnh.
-- Tạo Order Book của Hau CEX.
-- Tạo Recent Trades của Hau CEX.
+- Khớp Order.
+- Xác định Execution Price.
 - Settlement Trade.
-- Cập nhật Wallet hoặc Ledger.
+- Cập nhật Wallet.
+- Ghi Ledger.
+- Tạo Recent Trades của Hau CEX.
+- Tạo Order Book của Hau CEX.
 
-Khi hiển thị chart, frontend phải thể hiện rõ nguồn dữ liệu là `Binance` hoặc `Hau CEX`.
+Hau Chart chỉ được cập nhật từ Trade đã settlement và commit thành công.
+`TradeCreated` từ Matching Engine chưa settlement không được xuất hiện trên Hau Chart.
+
+Khi hiển thị chart, frontend phải thể hiện rõ nguồn dữ liệu, ví dụ:
+
+```text
+BTC/USDT · Binance Reference
+BTC/USDT · Hau CEX Market
+```
+
+Không được hiển thị dữ liệu Binance dưới nhãn Hau CEX hoặc dữ liệu Hau CEX dưới nhãn Binance.
 
 ---
 
@@ -452,7 +485,7 @@ Trong triển khai, process này nên đặt tên là `blockchain-worker` để 
 #### Public channel
 
 - `orderbook.update`
-- `trade.created`
+- `trade.created` cho Trade đã settlement
 - `ticker.update`
 - `candlestick.update`
 
@@ -644,7 +677,8 @@ EngineFailed
 | Deposit | Deposit Module | PostgreSQL |
 | Withdrawal | Withdrawal Module | PostgreSQL |
 | Hau CEX Candlestick | Market Data Worker | PostgreSQL |
-| Reference Chart và Reference Price | Reference Market Data Adapter | Binance, Redis/PostgreSQL cache |
+| Reference Chart và Reference Price | Reference Market Data Adapter/Worker | Binance, Redis/PostgreSQL cache |
+| Chart Source hiện tại | Frontend | Local storage hoặc user preference |
 | Audit Log | Admin Module | PostgreSQL |
 
 ### Nguyên tắc
@@ -652,6 +686,7 @@ EngineFailed
 - Matching Engine là nguồn trạng thái runtime của Order Book.
 - PostgreSQL là nguồn dữ liệu bền vững của Order, Trade, Wallet, Ledger và Hau CEX Candlestick.
 - Binance chỉ là nguồn tham chiếu bên ngoài, không phải nguồn dữ liệu nghiệp vụ của Hau CEX.
+- Chart Source chỉ quyết định nguồn Candlestick được hiển thị, không quyết định nguồn Order Book, Recent Trades hoặc nơi xử lý lệnh.
 - Nếu trạng thái runtime của Matching Engine và PostgreSQL lệch nhau, Trading Pair phải được tạm dừng và thực hiện reconciliation.
 - Redis không được xem là nguồn dữ liệu tài chính chính.
 
@@ -902,6 +937,9 @@ Consumer chỉ ACK message khi:
 Trade chỉ được công bố ra Market Data sau khi settlement thành công.
 
 Chart và giá từ Binance phải được đánh dấu là dữ liệu tham chiếu, không được công bố như Trade nội bộ của Hau CEX.
+
+Order Book, Recent Trades và Last Price nội bộ luôn thuộc Hau CEX.
+Việc đổi Chart Source không làm thay đổi nguồn dữ liệu này hoặc nơi xử lý Place Order và Cancel Order.
 
 ### 16.4. Sai lệch giữa Engine và Database
 
@@ -1338,8 +1376,8 @@ Lý do:
 
 Lý do:
 
+- Giúp học và xây dựng frontend chart giống trải nghiệm sàn giao dịch thật.
 - Giúp chart mặc định có dữ liệu liên tục trong môi trường demo.
-- Không phụ thuộc vào thanh khoản mỏng của Hau CEX khi hiển thị biểu đồ.
 - Không làm thay đổi bản chất giao dịch nội bộ của Hau CEX.
 - Order Book, Recent Trades, Matching, Settlement, Wallet và Ledger vẫn luôn thuộc Hau CEX.
 
@@ -1359,6 +1397,9 @@ Lý do:
 10. Mọi Consumer phải hỗ trợ idempotency.
 11. Không dùng giá Binance để quyết định khớp lệnh hoặc settlement.
 12. Chart phải hiển thị rõ nguồn dữ liệu `Binance` hoặc `Hau CEX`.
+13. Nguồn chart mặc định là `BINANCE`.
+14. Việc đổi Chart Source không được làm thay đổi Order Book, Recent Trades, Last Price nội bộ hoặc order destination.
+15. Hau Chart chỉ được cập nhật từ Trade đã settlement và commit thành công.
 
 ---
 
@@ -1374,6 +1415,6 @@ Kiến trúc được xem là đáp ứng MVP khi:
 6. Frontend nhận Order và Balance update qua WebSocket.
 7. Deposit ERC-20 được Listener phát hiện và credit đúng một lần.
 8. Withdrawal được Admin phê duyệt và gửi lên testnet.
-9. Chart mặc định có thể hiển thị dữ liệu tham chiếu từ Binance nhưng Order Book và Recent Trades vẫn từ Hau CEX.
+9. Chart mặc định hiển thị Binance Reference để demo frontend, có nhãn nguồn rõ ràng, nhưng Order Book và Recent Trades vẫn từ Hau CEX.
 10. Engine có thể restart và khôi phục Open Order.
 11. Các service chạy được bằng Docker Compose.

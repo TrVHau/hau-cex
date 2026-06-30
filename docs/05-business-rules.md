@@ -1447,6 +1447,100 @@ Worker phải lưu dấu vết Trade Event đã xử lý hoặc sử dụng phé
 
 ---
 
+## BR-MARKETDATA-009 — Hai nguồn biểu đồ
+
+Hệ thống hỗ trợ hai nguồn Candlestick:
+
+| Nguồn | Ý nghĩa |
+|---|---|
+| `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài. |
+| `HAU` | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
+
+Nguồn `BINANCE` chỉ là Reference Market Data.
+
+Trong MVP, nguồn `BINANCE` chủ yếu phục vụ mục tiêu học frontend và demo chart giống sàn thật.
+
+Nguồn `HAU` là Market Data nội bộ của Hau CEX.
+
+---
+
+## BR-MARKETDATA-010 — Nguồn biểu đồ mặc định
+
+Khi User mở trang giao dịch lần đầu, nguồn biểu đồ mặc định là:
+
+```text
+BINANCE
+```
+
+Frontend có thể lưu lựa chọn gần nhất của User.
+
+Lựa chọn nguồn biểu đồ không được làm thay đổi nguồn dữ liệu của:
+
+- Order Book.
+- Recent Trades.
+- Last Price nội bộ.
+- Order destination.
+- Nơi xử lý Place Order và Cancel Order.
+
+---
+
+## BR-MARKETDATA-011 — Phải hiển thị nguồn dữ liệu biểu đồ
+
+Frontend phải hiển thị rõ nguồn biểu đồ hiện tại.
+
+Ví dụ:
+
+```text
+BTC/USDT · Binance Reference
+BTC/USDT · Hau CEX Market
+```
+
+Không được hiển thị dữ liệu Binance dưới nhãn Hau CEX.
+
+Không được hiển thị dữ liệu Hau CEX dưới nhãn Binance.
+
+---
+
+## BR-MARKETDATA-012 — Dữ liệu Binance không tham gia nghiệp vụ
+
+Reference Market Data không được sử dụng để:
+
+- Khớp Order.
+- Xác định Execution Price.
+- Settlement Trade.
+- Cập nhật Wallet.
+- Ghi Ledger.
+- Tạo Recent Trades của Hau CEX.
+- Tạo Order Book của Hau CEX.
+
+---
+
+## BR-MARKETDATA-013 — Order Book và Recent Trades luôn thuộc Hau CEX
+
+Order Book luôn được tạo từ Order Book runtime của Hau CEX Matching Engine.
+
+Recent Trades luôn được tạo từ Trade đã settlement trên Hau CEX.
+
+Việc thay đổi Chart Source không làm thay đổi:
+
+- Order Book.
+- Recent Trades.
+- Last Price nội bộ.
+- Order destination.
+- Nơi xử lý Place Order và Cancel Order.
+
+---
+
+## BR-MARKETDATA-014 — Hau Chart chỉ dùng Trade đã settlement
+
+Biểu đồ Hau CEX chỉ được cập nhật từ Trade đã settlement và commit thành công.
+
+`TradeCreated` từ Matching Engine chưa settlement không được phép xuất hiện trên Hau Chart.
+
+Event dùng để cập nhật Hau Chart phải được phát sau khi transaction settlement commit.
+
+---
+
 # 12. Quy tắc về Deposit
 
 ## BR-DEPOSIT-001 — MVP chỉ hỗ trợ ERC-20 Deposit qua Exchange Vault
@@ -2094,6 +2188,8 @@ Log không được chứa:
 | `BR-ENGINE-007` | Execution Price lấy theo Maker Order. |
 | `BR-TRADE-004` | Settlement phải atomic. |
 | `BR-TRADE-005` | Mỗi Trade chỉ được settlement một lần. |
+| `BR-MARKETDATA-012` | Dữ liệu Binance không tham gia nghiệp vụ tài chính hoặc matching. |
+| `BR-MARKETDATA-013` | Order Book và Recent Trades luôn thuộc Hau CEX. |
 | `BR-DEPOSIT-004` | Deposit duy nhất theo chainId, txHash và logIndex. |
 | `BR-WITHDRAW-005` | Withdrawal phải có Idempotency Key. |
 | `BR-EVENT-004` | Mọi Consumer phải idempotent. |
