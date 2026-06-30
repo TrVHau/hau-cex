@@ -118,7 +118,8 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 |   9 | Hot Wallet           | Hot Wallet          | Ví kết nối trực tuyến, dùng để xử lý withdrawal.                       |
 |  10 | Exchange Vault       | Exchange Vault      | Smart contract hoặc ví lưu ký dùng để tiếp nhận và quản lý token test. |
 |  11 | Blockchain Listener  | Blockchain Listener | Service theo dõi transaction hoặc event trên blockchain.               |
-|  12 | Transaction Hash     | `txHash`            | Mã định danh của một transaction trên blockchain.                      |
+|  12 | Blockchain Worker    | Blockchain Worker   | Service xử lý withdrawal đã được phê duyệt và gửi transaction lên blockchain. |
+|  13 | Transaction Hash     | `txHash`            | Mã định danh của một transaction trên blockchain.                      |
 
 ## 9. Trạng thái nạp tài sản
 
@@ -163,16 +164,20 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 
 ## 12. Thuật ngữ về frontend và realtime
 
-| STT | Thuật ngữ         | Tên trong hệ thống | Định nghĩa                                                                   |
-| --: | ----------------- | ------------------ | ---------------------------------------------------------------------------- |
-|   1 | REST API          | REST API           | Giao diện HTTP dùng cho auth, wallet, order, trade và các chức năng quản lý. |
-|   2 | WebSocket         | WebSocket          | Kết nối hai chiều dùng để truyền dữ liệu realtime.                           |
-|   3 | WebSocket Room    | Room               | Nhóm kết nối cùng đăng ký nhận dữ liệu của một market hoặc user.             |
-|   4 | Order Book Update | `orderbook.update` | Event realtime thông báo thay đổi của Order Book.                            |
-|   5 | Trade Created     | `trade.created`    | Event realtime thông báo có Trade mới.                                       |
-|   6 | Order Updated     | `order.updated`    | Event riêng cho user thông báo trạng thái Order thay đổi.                    |
-|   7 | Balance Updated   | `balance.updated`  | Event riêng cho user thông báo số dư thay đổi.                               |
-|   8 | Market Data       | Market Data        | Dữ liệu công khai như order book, recent trades, ticker và candlestick.      |
+| STT | Thuật ngữ          | Tên trong hệ thống   | Định nghĩa                                                                   |
+| --: | ------------------ | -------------------- | ---------------------------------------------------------------------------- |
+|   1 | REST API           | REST API             | Giao diện HTTP dùng cho auth, wallet, order, trade và các chức năng quản lý. |
+|   2 | WebSocket          | WebSocket            | Kết nối hai chiều dùng để truyền dữ liệu realtime.                           |
+|   3 | WebSocket Room     | Room                 | Nhóm kết nối cùng đăng ký nhận dữ liệu của một market hoặc user.             |
+|   4 | Order Book Update  | `orderbook.update`   | Event realtime thông báo thay đổi của Order Book.                            |
+|   5 | Trade Created      | `trade.created`      | Event realtime thông báo có Trade mới.                                       |
+|   6 | Ticker Update      | `ticker.update`      | Event realtime thông báo dữ liệu Ticker thay đổi.                            |
+|   7 | Candlestick Update | `candlestick.update` | Event realtime thông báo dữ liệu nến giá thay đổi.                           |
+|   8 | Order Updated      | `order.updated`      | Event riêng cho user thông báo trạng thái Order thay đổi.                    |
+|   9 | Balance Updated    | `balance.updated`    | Event riêng cho user thông báo số dư thay đổi.                               |
+|  10 | Deposit Updated    | `deposit.updated`    | Event riêng cho user thông báo trạng thái Deposit thay đổi.                  |
+|  11 | Withdrawal Updated | `withdrawal.updated` | Event riêng cho user thông báo trạng thái Withdrawal thay đổi.               |
+|  12 | Market Data        | Market Data          | Dữ liệu công khai như order book, recent trades, ticker và candlestick.      |
 
 ## 13. Quy ước số liệu
 

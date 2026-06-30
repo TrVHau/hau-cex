@@ -159,7 +159,6 @@ Ledger phải ghi nhận các biến động liên quan đến:
 - Trade settlement.
 - Trading fee.
 - Admin adjustment nếu được cho phép.
-- Trade settlement
 
 Mỗi Ledger Entry cần có:
 
@@ -205,7 +204,7 @@ Admin có thể:
 - Mở thị trường.
 - Tạm dừng thị trường.
 
-### 4.7.
+### 4.7. Order
 
 MVP chỉ hỗ trợ:
 
@@ -443,7 +442,7 @@ Luồng nạp:
 Hệ thống phải chống ghi nhận trùng bằng:
 
 ```
-txHash + logIndex
+chainId + txHash + logIndex
 ```
 
 MVP chưa hỗ trợ:
@@ -632,7 +631,7 @@ Audit Log không được chỉnh sửa thông qua giao diện thông thường.
 - Không xử lý một Engine Event nhiều lần.
 - Tổng biến động Ledger phải giải thích được Wallet Balance.
 
-## 7.2. Tính nhất quán
+### 7.2. Tính nhất quán
 
 Các thao tác sau phải được xử lý trong database transaction:
 
@@ -655,7 +654,7 @@ Mục tiêu ban đầu:
 
 Các giá trị trên là mục tiêu kỹ thuật, không phải cam kết production.
 
-## 7.4. Bảo mật
+### 7.4. Bảo mật
 
 - Mật khẩu phải được hash.
 - API riêng tư yêu cầu authentication.
@@ -725,7 +724,7 @@ Các chức năng sau không thuộc MVP:
 - VIP Level.
 - Sub-account.
 
-## 8.4. Blockchain
+### 8.4. Blockchain
 
 - Multi-chain.
 - Cross-chain bridge.
@@ -824,7 +823,7 @@ MVP được xem là hoàn thành khi đáp ứng được luồng sau:
 - WebSocket.
 - Deposit token test.
 - Withdrawal token test.
-  -admin cơ bản.
+- Admin cơ bản.
 - Docker Compose.
 
 #### Should Have
