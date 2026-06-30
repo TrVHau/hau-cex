@@ -87,21 +87,25 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 
 ## 7. Thuật ngữ về giao dịch và dữ liệu thị trường
 
-| STT | Thuật ngữ            | Tên trong hệ thống | Định nghĩa                                                                           |
-| --: | -------------------- | ------------------ | ------------------------------------------------------------------------------------ |
-|   1 | Giao dịch đã khớp    | Trade              | Kết quả mua bán thành công giữa hai Order.                                           |
-|   2 | Giá khớp             | Execution Price    | Giá thực tế được sử dụng khi tạo Trade.                                              |
-|   3 | Khối lượng khớp      | Executed Quantity  | Số Base Asset được trao đổi trong một Trade.                                         |
-|   4 | Phí giao dịch        | Trading Fee        | Khoản phí được tính cho buyer, seller, maker hoặc taker.                             |
-|   5 | Giao dịch gần nhất   | Recent Trades      | Danh sách Trade mới nhất của một Trading Pair.                                       |
-|   6 | Giá cuối             | Last Price         | Giá của Trade gần nhất.                                                              |
-|   7 | Khối lượng giao dịch | Trading Volume     | Tổng khối lượng đã giao dịch trong một khoảng thời gian.                             |
-|   8 | Nến giá              | Candlestick        | Dữ liệu gồm open, high, low, close và volume trong một khoảng thời gian.             |
-|   9 | Giá mở cửa           | Open Price         | Giá của Trade đầu tiên trong một cây nến.                                            |
-|  10 | Giá cao nhất         | High Price         | Giá cao nhất trong khoảng thời gian của cây nến.                                     |
-|  11 | Giá thấp nhất        | Low Price          | Giá thấp nhất trong khoảng thời gian của cây nến.                                    |
-|  12 | Giá đóng cửa         | Close Price        | Giá của Trade cuối cùng trong một cây nến.                                           |
-|  13 | Ticker               | Market Ticker      | Dữ liệu tóm tắt thị trường như last price, volume, high, low và phần trăm biến động. |
+| STT | Thuật ngữ                    | Tên trong hệ thống          | Định nghĩa                                                                           |
+| --: | ---------------------------- | --------------------------- | ------------------------------------------------------------------------------------ |
+|   1 | Giao dịch đã khớp            | Trade                       | Kết quả mua bán thành công giữa hai Order.                                           |
+|   2 | Giá khớp                     | Execution Price             | Giá thực tế được sử dụng khi tạo Trade.                                              |
+|   3 | Khối lượng khớp              | Executed Quantity           | Số Base Asset được trao đổi trong một Trade.                                         |
+|   4 | Phí giao dịch                | Trading Fee                 | Khoản phí được tính cho buyer, seller, maker hoặc taker.                             |
+|   5 | Giao dịch gần nhất           | Recent Trades               | Danh sách Trade mới nhất của một Trading Pair.                                       |
+|   6 | Giá cuối                     | Last Price                  | Giá của Trade gần nhất.                                                              |
+|   7 | Khối lượng giao dịch         | Trading Volume              | Tổng khối lượng đã giao dịch trong một khoảng thời gian.                             |
+|   8 | Nến giá                      | Candlestick                 | Dữ liệu gồm open, high, low, close và volume trong một khoảng thời gian.             |
+|   9 | Giá mở cửa                   | Open Price                  | Giá của Trade đầu tiên trong một cây nến.                                            |
+|  10 | Giá cao nhất                 | High Price                  | Giá cao nhất trong khoảng thời gian của cây nến.                                     |
+|  11 | Giá thấp nhất                | Low Price                   | Giá thấp nhất trong khoảng thời gian của cây nến.                                    |
+|  12 | Giá đóng cửa                 | Close Price                 | Giá của Trade cuối cùng trong một cây nến.                                           |
+|  13 | Ticker                       | Market Ticker               | Dữ liệu tóm tắt thị trường như last price, volume, high, low và phần trăm biến động. |
+|  14 | Biểu đồ tham chiếu           | Reference Chart             | Biểu đồ lấy từ nguồn bên ngoài như Binance, chỉ dùng để tham khảo.                   |
+|  15 | Giá tham chiếu               | Reference Price             | Giá lấy từ nguồn bên ngoài, không dùng để khớp lệnh hoặc settlement.                 |
+|  16 | Dữ liệu thị trường tham chiếu | Reference Market Data       | Dữ liệu thị trường từ nguồn ngoài, tách biệt với Trade và Order Book của Hau CEX.    |
+|  17 | Bộ lấy dữ liệu tham chiếu    | Reference Market Data Adapter | Service lấy và cache Reference Market Data từ nguồn bên ngoài.                       |
 
 ## 8. Thuật ngữ về nạp và rút
 
@@ -146,21 +150,25 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 
 ## 11. Thuật ngữ về giao tiếp hệ thống
 
-| STT | Thuật ngữ         | Tên trong hệ thống | Định nghĩa                                                                                                 |
-| --: | ----------------- | ------------------ | ---------------------------------------------------------------------------------------------------------- |
-|   1 | Command           | Command            | Thông điệp yêu cầu một service thực hiện hành động. Ví dụ `PlaceOrderCommand`.                             |
-|   2 | Event             | Event              | Thông điệp thông báo một sự kiện đã xảy ra. Ví dụ `TradeCreatedEvent`.                                     |
-|   3 | Message Broker    | Message Broker     | Thành phần trung gian truyền command và event giữa NestJS và Go engine.                                    |
-|   4 | Redis Streams     | Redis Streams      | Cơ chế lưu và phân phối message được dùng trong phiên bản đầu.                                             |
-|   5 | Consumer          | Consumer           | Service đọc và xử lý message từ stream.                                                                    |
-|   6 | Producer          | Producer           | Service ghi message vào stream.                                                                            |
-|   7 | Consumer Group    | Consumer Group     | Nhóm consumer phối hợp xử lý message trong Redis Streams.                                                  |
-|   8 | Acknowledge       | ACK                | Xác nhận một message đã được xử lý thành công.                                                             |
-|   9 | Retry             | Retry              | Thử xử lý lại một tác vụ hoặc message bị lỗi.                                                              |
-|  10 | Dead-letter Queue | DLQ                | Nơi lưu các message thất bại nhiều lần để kiểm tra riêng.                                                  |
-|  11 | Idempotency       | Idempotency        | Tính chất bảo đảm cùng một request hoặc event được xử lý nhiều lần nhưng chỉ tạo ra một kết quả nghiệp vụ. |
-|  12 | Correlation ID    | Correlation ID     | Mã dùng để theo dõi một luồng xử lý xuyên qua nhiều service.                                               |
-|  13 | Outbox Event      | Outbox Event       | Event được lưu cùng transaction dữ liệu, sau đó được worker gửi đến message broker.                        |
+| STT | Thuật ngữ                | Tên trong hệ thống        | Định nghĩa                                                                                                 |
+| --: | ------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
+|   1 | Command                  | Command                   | Thông điệp yêu cầu một service thực hiện hành động. Ví dụ `PlaceOrderCommand`.                             |
+|   2 | Event                    | Event                     | Thông điệp thông báo một sự kiện đã xảy ra. Ví dụ `TradeCreatedEvent`.                                     |
+|   3 | Message Broker           | Message Broker            | Thành phần trung gian truyền command và event giữa NestJS và Go engine.                                    |
+|   4 | Redis Streams            | Redis Streams             | Cơ chế lưu và phân phối message được dùng trong phiên bản đầu.                                             |
+|   5 | Consumer                 | Consumer                  | Service đọc và xử lý message từ stream.                                                                    |
+|   6 | Producer                 | Producer                  | Service ghi message vào stream.                                                                            |
+|   7 | Consumer Group           | Consumer Group            | Nhóm consumer phối hợp xử lý message trong Redis Streams.                                                  |
+|   8 | Acknowledge              | ACK                       | Xác nhận một message đã được xử lý thành công.                                                             |
+|   9 | Retry                    | Retry                     | Thử xử lý lại một tác vụ hoặc message bị lỗi.                                                              |
+|  10 | Dead-letter Queue        | DLQ                       | Nơi lưu các message thất bại nhiều lần để kiểm tra riêng.                                                  |
+|  11 | Idempotency              | Idempotency               | Tính chất bảo đảm cùng một request hoặc event được xử lý nhiều lần nhưng chỉ tạo ra một kết quả nghiệp vụ. |
+|  12 | Correlation ID           | Correlation ID            | Mã dùng để theo dõi một luồng xử lý xuyên qua nhiều service.                                               |
+|  13 | Outbox Event             | Outbox Event              | Event được lưu cùng transaction dữ liệu, sau đó được worker gửi đến message broker.                        |
+|  14 | Outbox Worker            | Outbox Worker             | Worker đọc Outbox Event đã commit và gửi đến message broker.                                               |
+|  15 | Engine Event Consumer    | Engine Event Consumer     | Consumer xử lý event phát ra từ Matching Engine.                                                          |
+|  16 | Order Event Consumer     | Order Event Consumer      | Consumer xử lý event Order không phải settlement Trade, ví dụ OrderAccepted hoặc OrderCancelled.           |
+|  17 | Trade Settlement Consumer | Trade Settlement Consumer | Consumer xử lý `TradeCreated` và settlement Trade theo transaction.                                        |
 
 ## 12. Thuật ngữ về frontend và realtime
 
