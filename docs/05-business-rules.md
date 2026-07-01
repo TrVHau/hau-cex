@@ -61,11 +61,11 @@ Hệ thống không được:
 
 Tài khoản có các trạng thái:
 
-| Trạng thái | Ý nghĩa |
-|---|---|
-| `ACTIVE` | User được phép sử dụng hệ thống. |
-| `LOCKED` | User bị khóa và không được thực hiện thao tác riêng tư. |
-| `DISABLED` | Tài khoản đã bị vô hiệu hóa. |
+| Trạng thái | Ý nghĩa                                                 |
+| ---------- | ------------------------------------------------------- |
+| `ACTIVE`   | User được phép sử dụng hệ thống.                        |
+| `LOCKED`   | User bị khóa và không được thực hiện thao tác riêng tư. |
+| `DISABLED` | Tài khoản đã bị vô hiệu hóa.                            |
 
 Chỉ tài khoản có trạng thái `ACTIVE` mới được:
 
@@ -81,10 +81,10 @@ Chỉ tài khoản có trạng thái `ACTIVE` mới được:
 
 Hệ thống có tối thiểu hai role:
 
-| Role | Quyền |
-|---|---|
-| `USER` | Quản lý tài khoản, ví và giao dịch của chính mình. |
-| `ADMIN` | Quản lý User, Asset, Trading Pair và Withdrawal. |
+| Role    | Quyền                                              |
+| ------- | -------------------------------------------------- |
+| `USER`  | Quản lý tài khoản, ví và giao dịch của chính mình. |
+| `ADMIN` | Quản lý User, Asset, Trading Pair và Withdrawal.   |
 
 User không được tự thay đổi:
 
@@ -255,12 +255,12 @@ baseAssetId + quoteAssetId
 
 Trading Pair có các trạng thái:
 
-| Trạng thái | Ý nghĩa |
-|---|---|
-| `INACTIVE` | Đã được tạo nhưng chưa giao dịch. |
-| `ACTIVE` | Cho phép đặt và khớp Order. |
-| `SUSPENDED` | Tạm dừng nhận Order mới. |
-| `CLOSED` | Thị trường đã đóng. |
+| Trạng thái  | Ý nghĩa                           |
+| ----------- | --------------------------------- |
+| `INACTIVE`  | Đã được tạo nhưng chưa giao dịch. |
+| `ACTIVE`    | Cho phép đặt và khớp Order.       |
+| `SUSPENDED` | Tạm dừng nhận Order mới.          |
+| `CLOSED`    | Thị trường đã đóng.               |
 
 Chỉ Trading Pair có trạng thái `ACTIVE` mới nhận Order mới.
 
@@ -592,12 +592,12 @@ referenceId
 
 Ví dụ:
 
-| Reference Type | Reference ID |
-|---|---|
-| `ORDER` | Order ID |
-| `TRADE` | Trade ID |
-| `DEPOSIT` | Deposit ID |
-| `WITHDRAWAL` | Withdrawal ID |
+| Reference Type     | Reference ID  |
+| ------------------ | ------------- |
+| `ORDER`            | Order ID      |
+| `TRADE`            | Trade ID      |
+| `DEPOSIT`          | Deposit ID    |
+| `WITHDRAWAL`       | Withdrawal ID |
 | `ADMIN_ADJUSTMENT` | Adjustment ID |
 
 ---
@@ -614,9 +614,9 @@ LOCKED
 Ví dụ khi khóa 100 USDT:
 
 | Balance Type | Amount |
-|---|---:|
-| `AVAILABLE` | `-100` |
-| `LOCKED` | `+100` |
+| ------------ | -----: |
+| `AVAILABLE`  | `-100` |
+| `LOCKED`     | `+100` |
 
 ---
 
@@ -696,9 +696,9 @@ Chưa hỗ trợ:
 
 Order có hai phía:
 
-| Side | Ý nghĩa |
-|---|---|
-| `BUY` | Mua Base Asset bằng Quote Asset. |
+| Side   | Ý nghĩa                             |
+| ------ | ----------------------------------- |
+| `BUY`  | Mua Base Asset bằng Quote Asset.    |
 | `SELL` | Bán Base Asset để nhận Quote Asset. |
 
 ---
@@ -767,15 +767,15 @@ remainingQuantity <= originalQuantity
 
 Order có các trạng thái:
 
-| Trạng thái | Ý nghĩa |
-|---|---|
-| `PENDING` | Đã tạo nhưng chưa được Engine xác nhận. |
-| `OPEN` | Đang nằm trong Order Book. |
-| `PARTIALLY_FILLED` | Đã khớp một phần. |
-| `FILLED` | Đã khớp toàn bộ. |
-| `CANCEL_PENDING` | Đang chờ Engine xác nhận hủy. |
-| `CANCELLED` | Đã được hủy. |
-| `REJECTED` | Không được chấp nhận. |
+| Trạng thái         | Ý nghĩa                                 |
+| ------------------ | --------------------------------------- |
+| `PENDING`          | Đã tạo nhưng chưa được Engine xác nhận. |
+| `OPEN`             | Đang nằm trong Order Book.              |
+| `PARTIALLY_FILLED` | Đã khớp một phần.                       |
+| `FILLED`           | Đã khớp toàn bộ.                        |
+| `CANCEL_PENDING`   | Đang chờ Engine xác nhận hủy.           |
+| `CANCELLED`        | Đã được hủy.                            |
+| `REJECTED`         | Không được chấp nhận.                   |
 
 ---
 
@@ -1451,10 +1451,10 @@ Worker phải lưu dấu vết Trade Event đã xử lý hoặc sử dụng phé
 
 Hệ thống hỗ trợ hai nguồn Candlestick:
 
-| Nguồn | Ý nghĩa |
-|---|---|
-| `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài. |
-| `HAU` | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
+| Nguồn     | Ý nghĩa                                                    |
+| --------- | ---------------------------------------------------------- |
+| `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài.                   |
+| `HAU`     | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
 
 Nguồn `BINANCE` chỉ là Reference Market Data.
 
@@ -1705,17 +1705,17 @@ Cùng một User và Idempotency Key chỉ được tạo một Withdrawal.
 
 Withdrawal có các trạng thái:
 
-| Trạng thái | Ý nghĩa |
-|---|---|
-| `PENDING` | Đã tạo và chờ kiểm tra. |
-| `REVIEWING` | Đang được Admin kiểm tra. |
-| `APPROVED` | Đã được phê duyệt. |
-| `PROCESSING` | Worker đang tạo transaction. |
+| Trạng thái    | Ý nghĩa                            |
+| ------------- | ---------------------------------- |
+| `PENDING`     | Đã tạo và chờ kiểm tra.            |
+| `REVIEWING`   | Đang được Admin kiểm tra.          |
+| `APPROVED`    | Đã được phê duyệt.                 |
+| `PROCESSING`  | Worker đang tạo transaction.       |
 | `BROADCASTED` | Transaction đã gửi lên blockchain. |
-| `COMPLETED` | Transaction đã được xác nhận. |
-| `REJECTED` | Bị Admin từ chối. |
-| `FAILED` | Xử lý thất bại. |
-| `CANCELLED` | Đã được hủy trước khi broadcast. |
+| `COMPLETED`   | Transaction đã được xác nhận.      |
+| `REJECTED`    | Bị Admin từ chối.                  |
+| `FAILED`      | Xử lý thất bại.                    |
+| `CANCELLED`   | Đã được hủy trước khi broadcast.   |
 
 ---
 
@@ -2177,25 +2177,25 @@ Log không được chứa:
 
 # 20. Bảng tổng hợp quy tắc quan trọng
 
-| Mã | Quy tắc |
-|---|---|
-| `BR-WALLET-003` | Available Balance và Locked Balance không được âm. |
-| `BR-WALLET-005` | Mọi thay đổi số dư phải có Ledger Entry. |
-| `BR-ORDER-005` | Original Quantity bằng Filled Quantity cộng Remaining Quantity. |
-| `BR-ORDER-010` | Order phải có Sequence duy nhất theo Trading Pair. |
-| `BR-ENGINE-003` | Engine sử dụng Price-Time Priority. |
-| `BR-ENGINE-006` | Buy và Sell khớp khi Buy Price lớn hơn hoặc bằng Sell Price. |
-| `BR-ENGINE-007` | Execution Price lấy theo Maker Order. |
-| `BR-TRADE-004` | Settlement phải atomic. |
-| `BR-TRADE-005` | Mỗi Trade chỉ được settlement một lần. |
+| Mã                  | Quy tắc                                                           |
+| ------------------- | ----------------------------------------------------------------- |
+| `BR-WALLET-003`     | Available Balance và Locked Balance không được âm.                |
+| `BR-WALLET-005`     | Mọi thay đổi số dư phải có Ledger Entry.                          |
+| `BR-ORDER-005`      | Original Quantity bằng Filled Quantity cộng Remaining Quantity.   |
+| `BR-ORDER-010`      | Order phải có Sequence duy nhất theo Trading Pair.                |
+| `BR-ENGINE-003`     | Engine sử dụng Price-Time Priority.                               |
+| `BR-ENGINE-006`     | Buy và Sell khớp khi Buy Price lớn hơn hoặc bằng Sell Price.      |
+| `BR-ENGINE-007`     | Execution Price lấy theo Maker Order.                             |
+| `BR-TRADE-004`      | Settlement phải atomic.                                           |
+| `BR-TRADE-005`      | Mỗi Trade chỉ được settlement một lần.                            |
 | `BR-MARKETDATA-012` | Dữ liệu Binance không tham gia nghiệp vụ tài chính hoặc matching. |
-| `BR-MARKETDATA-013` | Order Book và Recent Trades luôn thuộc Hau CEX. |
-| `BR-DEPOSIT-004` | Deposit duy nhất theo chainId, txHash và logIndex. |
-| `BR-WITHDRAW-005` | Withdrawal phải có Idempotency Key. |
-| `BR-EVENT-004` | Mọi Consumer phải idempotent. |
-| `BR-EVENT-007` | Sử dụng Outbox Pattern khi phát Event sau transaction. |
-| `BR-WS-004` | Chỉ phát WebSocket Event sau khi database commit. |
-| `BR-DATA-002` | Go Engine không sử dụng float64 cho giá và khối lượng. |
+| `BR-MARKETDATA-013` | Order Book và Recent Trades luôn thuộc Hau CEX.                   |
+| `BR-DEPOSIT-004`    | Deposit duy nhất theo chainId, txHash và logIndex.                |
+| `BR-WITHDRAW-005`   | Withdrawal phải có Idempotency Key.                               |
+| `BR-EVENT-004`      | Mọi Consumer phải idempotent.                                     |
+| `BR-EVENT-007`      | Sử dụng Outbox Pattern khi phát Event sau transaction.            |
+| `BR-WS-004`         | Chỉ phát WebSocket Event sau khi database commit.                 |
+| `BR-DATA-002`       | Go Engine không sử dụng float64 cho giá và khối lượng.            |
 
 ---
 

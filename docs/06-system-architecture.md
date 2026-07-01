@@ -65,23 +65,23 @@ Mô hình này được chọn vì:
 
 ## 4. Công nghệ chính
 
-| Thành phần | Công nghệ |
-|---|---|
-| Frontend | React, TypeScript, Vite |
-| Backend API | NestJS, TypeScript |
-| Matching Engine | Go |
-| Database | PostgreSQL |
-| ORM | Prisma |
-| Cache và Messaging | Redis |
-| Message Stream | Redis Streams |
-| Background Job | BullMQ |
-| Realtime | Socket.IO |
+| Thành phần            | Công nghệ                  |
+| --------------------- | -------------------------- |
+| Frontend              | React, TypeScript, Vite    |
+| Backend API           | NestJS, TypeScript         |
+| Matching Engine       | Go                         |
+| Database              | PostgreSQL                 |
+| ORM                   | Prisma                     |
+| Cache và Messaging    | Redis                      |
+| Message Stream        | Redis Streams              |
+| Background Job        | BullMQ                     |
+| Realtime              | Socket.IO                  |
 | Reference Market Data | Binance public market data |
-| Smart Contract | Solidity, OpenZeppelin |
-| Contract Development | Hardhat |
-| Blockchain Client | viem |
-| Local Infrastructure | Docker Compose |
-| CI/CD | GitHub Actions |
+| Smart Contract        | Solidity, OpenZeppelin     |
+| Contract Development  | Hardhat                    |
+| Blockchain Client     | viem                       |
+| Local Infrastructure  | Docker Compose             |
+| CI/CD                 | GitHub Actions             |
 
 ---
 
@@ -381,10 +381,10 @@ Không công bố `TradeCreated` chỉ mới được Matching Engine tạo như
 
 Hệ thống hỗ trợ hai nguồn Candlestick:
 
-| Nguồn | Ý nghĩa |
-| --- | --- |
+| Nguồn     | Ý nghĩa                                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
 | `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài, lấy qua Reference Market Data Adapter/Worker để học/demo frontend chart. |
-| `HAU` | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
+| `HAU`     | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX.                                                        |
 
 Nguồn chart mặc định khi User mở trang giao dịch lần đầu là `BINANCE`.
 Frontend có thể lưu lựa chọn Chart Source gần nhất của User.
@@ -593,20 +593,20 @@ Matching không được thực hiện trong Smart Contract.
 
 ## 8. Giao tiếp giữa các thành phần
 
-| Nguồn | Đích | Giao thức | Mục đích |
-|---|---|---|---|
-| Frontend | Backend API | HTTPS REST | Auth, Wallet, Order, History |
-| Frontend | WebSocket Gateway | Socket.IO | Realtime update |
-| Backend API | PostgreSQL | TCP/SQL | Dữ liệu nghiệp vụ |
-| Backend API | Redis | Redis Protocol | Cache, Streams, Queue |
-| Outbox Worker | Matching Engine | Redis Streams | Order Command |
-| Matching Engine | Engine Event Consumers | Redis Streams | Engine Event |
-| Trade Settlement Consumer | Market Data Worker | Redis Streams | Trade Settled |
-| Backend | WebSocket Gateway | Redis Pub/Sub hoặc Streams | Realtime fan-out |
-| Reference Market Data Adapter | Binance | HTTPS/WebSocket | Chart và giá tham chiếu |
-| Reference Market Data Adapter | Redis/PostgreSQL | Redis Protocol/SQL | Cache dữ liệu tham chiếu |
-| Blockchain Listener | EVM RPC | JSON-RPC/WebSocket | Theo dõi Deposit |
-| Blockchain Worker | EVM RPC | JSON-RPC | Gửi Withdrawal |
+| Nguồn                         | Đích                   | Giao thức                  | Mục đích                     |
+| ----------------------------- | ---------------------- | -------------------------- | ---------------------------- |
+| Frontend                      | Backend API            | HTTPS REST                 | Auth, Wallet, Order, History |
+| Frontend                      | WebSocket Gateway      | Socket.IO                  | Realtime update              |
+| Backend API                   | PostgreSQL             | TCP/SQL                    | Dữ liệu nghiệp vụ            |
+| Backend API                   | Redis                  | Redis Protocol             | Cache, Streams, Queue        |
+| Outbox Worker                 | Matching Engine        | Redis Streams              | Order Command                |
+| Matching Engine               | Engine Event Consumers | Redis Streams              | Engine Event                 |
+| Trade Settlement Consumer     | Market Data Worker     | Redis Streams              | Trade Settled                |
+| Backend                       | WebSocket Gateway      | Redis Pub/Sub hoặc Streams | Realtime fan-out             |
+| Reference Market Data Adapter | Binance                | HTTPS/WebSocket            | Chart và giá tham chiếu      |
+| Reference Market Data Adapter | Redis/PostgreSQL       | Redis Protocol/SQL         | Cache dữ liệu tham chiếu     |
+| Blockchain Listener           | EVM RPC                | JSON-RPC/WebSocket         | Theo dõi Deposit             |
+| Blockchain Worker             | EVM RPC                | JSON-RPC                   | Gửi Withdrawal               |
 
 ---
 
@@ -664,22 +664,22 @@ EngineFailed
 
 ## 10. Quyền sở hữu dữ liệu
 
-| Dữ liệu | Thành phần sở hữu logic | Nguồn dữ liệu bền vững |
-|---|---|---|
-| User | Backend | PostgreSQL |
-| Session | Backend | PostgreSQL hoặc Redis |
-| Wallet | Wallet Module | PostgreSQL |
-| Ledger | Ledger Module | PostgreSQL |
-| Order record | Order Module | PostgreSQL |
-| Order Book runtime | Matching Engine | Memory + Snapshot |
-| Matching sequence | Matching Engine | Snapshot/Event Log |
-| Trade | Settlement Module | PostgreSQL |
-| Deposit | Deposit Module | PostgreSQL |
-| Withdrawal | Withdrawal Module | PostgreSQL |
-| Hau CEX Candlestick | Market Data Worker | PostgreSQL |
-| Reference Chart và Reference Price | Reference Market Data Adapter/Worker | Binance, Redis/PostgreSQL cache |
-| Chart Source hiện tại | Frontend | Local storage hoặc user preference |
-| Audit Log | Admin Module | PostgreSQL |
+| Dữ liệu                            | Thành phần sở hữu logic              | Nguồn dữ liệu bền vững             |
+| ---------------------------------- | ------------------------------------ | ---------------------------------- |
+| User                               | Backend                              | PostgreSQL                         |
+| Session                            | Backend                              | PostgreSQL hoặc Redis              |
+| Wallet                             | Wallet Module                        | PostgreSQL                         |
+| Ledger                             | Ledger Module                        | PostgreSQL                         |
+| Order record                       | Order Module                         | PostgreSQL                         |
+| Order Book runtime                 | Matching Engine                      | Memory + Snapshot                  |
+| Matching sequence                  | Matching Engine                      | Snapshot/Event Log                 |
+| Trade                              | Settlement Module                    | PostgreSQL                         |
+| Deposit                            | Deposit Module                       | PostgreSQL                         |
+| Withdrawal                         | Withdrawal Module                    | PostgreSQL                         |
+| Hau CEX Candlestick                | Market Data Worker                   | PostgreSQL                         |
+| Reference Chart và Reference Price | Reference Market Data Adapter/Worker | Binance, Redis/PostgreSQL cache    |
+| Chart Source hiện tại              | Frontend                             | Local storage hoặc user preference |
+| Audit Log                          | Admin Module                         | PostgreSQL                         |
 
 ### Nguyên tắc
 
@@ -958,17 +958,17 @@ Nếu Engine đã match nhưng settlement liên tục thất bại:
 
 Các nghiệp vụ cần idempotency:
 
-| Nghiệp vụ | Khóa chống trùng |
-|---|---|
-| Tạo Order | User ID + Idempotency Key |
-| Place Order Command | commandId |
-| Cancel Order Command | commandId |
-| Settlement Trade | tradeId hoặc eventId |
-| Deposit | chainId + txHash + logIndex |
-| Withdrawal | User ID + Idempotency Key |
-| Withdrawal broadcast | withdrawalId + txHash hoặc nonce |
-| Ledger Entry | Reference + Entry Type + Balance Type |
-| Outbox Event | eventId |
+| Nghiệp vụ            | Khóa chống trùng                      |
+| -------------------- | ------------------------------------- |
+| Tạo Order            | User ID + Idempotency Key             |
+| Place Order Command  | commandId                             |
+| Cancel Order Command | commandId                             |
+| Settlement Trade     | tradeId hoặc eventId                  |
+| Deposit              | chainId + txHash + logIndex           |
+| Withdrawal           | User ID + Idempotency Key             |
+| Withdrawal broadcast | withdrawalId + txHash hoặc nonce      |
+| Ledger Entry         | Reference + Entry Type + Balance Type |
+| Outbox Event         | eventId                               |
 
 ---
 

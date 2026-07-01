@@ -396,10 +396,10 @@ High Price, Low Price và Trading Volume nội bộ cũng chỉ được tính t
 
 MVP hỗ trợ hai nguồn Candlestick:
 
-| Nguồn | Ý nghĩa |
-| --- | --- |
+| Nguồn     | Ý nghĩa                                                                                      |
+| --------- | -------------------------------------------------------------------------------------------- |
 | `BINANCE` | Dữ liệu thị trường tham chiếu bên ngoài, dùng làm nguồn chart mặc định để học/demo frontend. |
-| `HAU` | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX. |
+| `HAU`     | Dữ liệu được tổng hợp từ Trade đã settlement trên Hau CEX.                                   |
 
 Frontend có thể lưu lựa chọn Chart Source gần nhất của User.
 Tuy nhiên, việc đổi Chart Source không được làm thay đổi:
