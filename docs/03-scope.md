@@ -262,6 +262,7 @@ MVP sử dụng các trạng thái sau:
 
 Không được hủy Order có trạng thái:
 
+- PENDING
 - FILLED
 - CANCELLED
 - REJECTED
@@ -351,6 +352,12 @@ Taker Fee: 0.15%
 ```
 
 Phí giao dịch có thể được cấu hình bởi admin
+
+Trong MVP, phí giao dịch được ghi nhận vào Treasury Wallet:
+
+- Buyer Fee vào Treasury Wallet của Base Asset.
+- Seller Fee vào Treasury Wallet của Quote Asset.
+- Mỗi khoản phí có Ledger Entry phía User và Treasury.
 
 MVP chưa hỗ trợ:
 

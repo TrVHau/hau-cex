@@ -85,6 +85,11 @@ Hệ thống có tối thiểu hai role:
 | ------- | -------------------------------------------------- |
 | `USER`  | Quản lý tài khoản, ví và giao dịch của chính mình. |
 | `ADMIN` | Quản lý User, Asset, Trading Pair và Withdrawal.   |
+| `SYSTEM` | Tài khoản nội bộ phục vụ hạch toán như Treasury, không phải actor đăng nhập. |
+
+Hệ thống có thể có Treasury Account thuộc role `SYSTEM` để ghi nhận tài sản thuộc nền tảng.
+Treasury Account không phải actor người dùng thông thường và chỉ được dùng cho hạch toán nội bộ như phí giao dịch.
+Treasury Account không được đăng nhập, không được tạo session, không được khóa hoặc chỉnh sửa qua Admin User API thông thường, và Wallet chỉ được Settlement Service cập nhật trong transaction nghiệp vụ hợp lệ.
 
 User không được tự thay đổi:
 
@@ -117,7 +122,9 @@ Khi User bị khóa:
 2. User không được tạo request riêng tư mới.
 3. Các Open Order được xử lý theo chính sách quản trị đã cấu hình.
 
-Trong MVP, mặc định Open Order của User bị khóa tài khoản vẫn được giữ nguyên cho đến khi Admin hoặc User sau khi được mở khóa thực hiện hủy.
+Trong MVP, mặc định Open Order của User bị khóa tài khoản vẫn được giữ nguyên cho đến khi User sau khi được mở khóa thực hiện hủy.
+
+Admin Cancel Order chưa thuộc phạm vi MVP.
 
 ---
 
@@ -385,7 +392,7 @@ Khi Trading Pair chuyển sang `SUSPENDED`:
 
 Trong MVP, Open Order được giữ nguyên khi market tạm dừng.
 
-Admin có thể thực hiện một thao tác riêng để hủy toàn bộ Open Order nếu cần.
+Thao tác Admin cancel toàn bộ Open Order là future scope, chưa thuộc MVP.
 
 ---
 
@@ -507,30 +514,25 @@ lockedBaseBalance += quantity
 Khi tạo Withdrawal:
 
 ```text
-totalLocked = withdrawalAmount + withdrawalFee
+lockedAmount = withdrawalAmount
 ```
 
 Hệ thống thực hiện:
 
 ```text
-availableBalance -= totalLocked
-lockedBalance += totalLocked
+availableBalance -= withdrawalAmount
+lockedBalance += withdrawalAmount
 ```
 
-Nếu phí được trừ trực tiếp từ số lượng rút thì phải ghi rõ:
-
-```text
-receivedAmount = withdrawalAmount - withdrawalFee
-```
-
-MVP sử dụng mô hình:
+MVP sử dụng mô hình phí được trừ trực tiếp từ số lượng rút:
 
 ```text
 User nhập withdrawalAmount
 receivedAmount = withdrawalAmount - withdrawalFee
+lockedAmount = withdrawalAmount
 ```
 
-Do đó số dư bị khóa là `withdrawalAmount`.
+Do đó số dư bị khóa là `withdrawalAmount`, không cộng thêm `withdrawalFee`.
 
 ---
 
@@ -797,10 +799,22 @@ PARTIALLY_FILLED → PARTIALLY_FILLED
 PARTIALLY_FILLED → FILLED
 PARTIALLY_FILLED → CANCEL_PENDING
 
+CANCEL_PENDING → CANCEL_PENDING
 CANCEL_PENDING → CANCELLED
-CANCEL_PENDING → PARTIALLY_FILLED
 CANCEL_PENDING → FILLED
 ```
+
+Khi Order đang `CANCEL_PENDING` nhưng vẫn phát sinh Partial Fill trước khi Cancel Command được Engine xử lý:
+
+- Cập nhật `filledQuantity`.
+- Cập nhật `remainingQuantity`.
+- Cập nhật `remainingLockedAmount`.
+- Giữ nguyên trạng thái `CANCEL_PENDING`.
+
+Order chỉ chuyển:
+
+- `CANCEL_PENDING → FILLED` khi Order được khớp hết trước khi Cancel Command được xử lý.
+- `CANCEL_PENDING → CANCELLED` khi Engine hủy thành công Remaining Quantity.
 
 Không được chuyển từ trạng thái kết thúc sang trạng thái hoạt động:
 
@@ -838,9 +852,10 @@ Order ở trạng thái `PENDING` có thể cần cơ chế timeout riêng nếu
 
 User chỉ được hủy Order thuộc tài khoản của mình.
 
-Admin không được hủy Order của User thông qua API User thông thường.
+Admin Cancel Order chưa thuộc phạm vi MVP.
+Trong MVP, Admin không được hủy Order của User, kể cả qua API User thông thường.
 
-Thao tác hủy bởi Admin phải:
+Khi bổ sung ở phiên bản sau, thao tác hủy bởi Admin phải:
 
 - Sử dụng API riêng.
 - Có lý do.
@@ -1023,6 +1038,10 @@ Order chuyển thành:
 PARTIALLY_FILLED
 ```
 
+Ngoại lệ: nếu trạng thái bền vững của Order đang là `CANCEL_PENDING`,
+Settlement chỉ cập nhật quantity và locked amount,
+không chuyển trạng thái về `PARTIALLY_FILLED`.
+
 Nếu không còn Order đối ứng phù hợp, phần Remaining Quantity được giữ trong Order Book.
 
 ---
@@ -1058,6 +1077,9 @@ CANCELLED
 REJECTED
 ```
 
+`CANCEL_PENDING` là trạng thái bền vững phía Backend khi yêu cầu hủy đã được gửi.
+Trong thời gian Cancel Command chưa đến lượt xử lý, phần Remaining Quantity của Order vẫn có thể còn trong Order Book runtime và vẫn có thể được match theo thứ tự command hợp lệ.
+
 ---
 
 ## BR-ENGINE-012 — Command phải idempotent
@@ -1076,6 +1098,8 @@ Nếu Engine nhận lại command đã xử lý:
 ## BR-ENGINE-013 — Trade Event phải duy nhất
 
 Mỗi lần khớp tạo một `tradeId` duy nhất.
+
+Mỗi lần khớp cũng phải có `engineMatchId` ổn định để replay cùng một command không tạo ra Trade nghiệp vụ mới.
 
 Cùng một Trade Event có thể được gửi lại nhưng không được tạo thêm một Trade nghiệp vụ mới.
 
@@ -1190,10 +1214,11 @@ Các thao tác sau phải nằm trong cùng một database transaction:
 3. Cập nhật Sell Order.
 4. Cập nhật Wallet buyer.
 5. Cập nhật Wallet seller.
-6. Thu phí.
-7. Tạo Ledger Entry.
-8. Đánh dấu Engine Event đã xử lý.
-9. Tạo Outbox Event cần thiết.
+6. Cập nhật Treasury Wallet nhận phí.
+7. Thu phí.
+8. Tạo Ledger Entry.
+9. Đánh dấu Engine Event đã xử lý.
+10. Tạo Outbox Event cần thiết.
 
 Nếu một bước thất bại, toàn bộ transaction phải rollback.
 
@@ -1203,7 +1228,12 @@ Nếu một bước thất bại, toàn bộ transaction phải rollback.
 
 Mỗi `tradeId` chỉ được settlement một lần.
 
-Database phải có unique constraint đối với `tradeId`.
+Mỗi `engineMatchId` cũng chỉ được tạo một Trade nghiệp vụ.
+
+Database phải có unique constraint đối với:
+
+- `tradeId`.
+- `engineMatchId`.
 
 Consumer phải kiểm tra idempotency trước khi cập nhật số dư.
 
@@ -1260,7 +1290,7 @@ lockedQuoteBalance → availableQuoteBalance
 Settlement phải khóa dữ liệu theo thứ tự cố định:
 
 1. Hai Order theo Order ID.
-2. Các Wallet theo Asset ID và User ID.
+2. Các Wallet liên quan, bao gồm buyer, seller và Treasury Wallet, theo Asset ID và User ID.
 3. Các bản ghi liên quan khác.
 
 Mục tiêu là giảm nguy cơ deadlock.
@@ -1311,6 +1341,8 @@ Trong MVP:
 
 - Buyer trả phí bằng Base Asset nhận được.
 - Seller trả phí bằng Quote Asset nhận được.
+- Buyer Fee được chuyển vào Treasury Wallet của Base Asset.
+- Seller Fee được chuyển vào Treasury Wallet của Quote Asset.
 
 Buyer nhận:
 
@@ -1325,6 +1357,15 @@ Seller nhận:
 receivedQuote =
 executionPrice × executedQuantity - sellerFee
 ```
+
+Settlement phải tạo Ledger Entry cho cả phía User và Treasury:
+
+- Buyer có Ledger Entry `TRADING_FEE` âm bằng Base Asset.
+- Treasury có Ledger Entry `TRADING_FEE` dương bằng Base Asset.
+- Seller có Ledger Entry `TRADING_FEE` âm bằng Quote Asset.
+- Treasury có Ledger Entry `TRADING_FEE` dương bằng Quote Asset.
+
+Không được chỉ giảm số lượng User nhận mà không ghi nhận phí vào Treasury Wallet.
 
 ---
 
@@ -1432,7 +1473,7 @@ Trong đó:
 Khóa duy nhất:
 
 ```text
-tradingPairId + interval + openTime
+tradingPairId + source + interval + openTime
 ```
 
 Không được tạo nhiều candle cho cùng một Trading Pair, interval và openTime.
@@ -1935,9 +1976,13 @@ WebSocket không được xem là nguồn dữ liệu bền vững.
 
 Sau khi mất kết nối, frontend phải:
 
-1. Gọi REST API lấy snapshot mới.
-2. Đăng ký lại WebSocket Room.
-3. Tiếp tục nhận update.
+1. Đăng ký lại WebSocket Room và buffer các update đến sớm.
+2. Gọi REST API lấy snapshot mới.
+3. Bỏ các update có sequence <= snapshot.sequence.
+4. Áp dụng các update còn lại theo sequence/previousSequence.
+5. Tiếp tục nhận update.
+
+Nếu server hỗ trợ, có thể gửi snapshot ngay sau khi subscribe để giảm độ phức tạp ở client.
 
 ---
 
@@ -1960,7 +2005,7 @@ Các hành động sau phải yêu cầu lý do:
 - Từ chối Withdrawal.
 - Tạm dừng Trading Pair.
 - Điều chỉnh số dư.
-- Hủy Order bằng quyền Admin.
+- Hủy Order bằng quyền Admin nếu được bổ sung ở phiên bản sau.
 
 ---
 
@@ -2049,7 +2094,7 @@ Wallet(userId, assetId)
 TradingPair(baseAssetId, quoteAssetId)
 Deposit(chainId, txHash, logIndex)
 Trade.tradeId
-ProcessedEvent.eventId
+ProcessedEvent(consumerName, messageId)
 Withdrawal(userId, idempotencyKey)
 ```
 

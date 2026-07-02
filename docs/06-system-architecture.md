@@ -256,12 +256,12 @@ Matching Engine là service độc lập viết bằng Go.
 
 #### Trách nhiệm
 
-- Nhận `PlaceOrderCommand`.
-- Nhận `CancelOrderCommand`.
+- Nhận messageType `PlaceOrder`.
+- Nhận messageType `CancelOrder`.
 - Quản lý Order Book trong memory.
 - Áp dụng Price-Time Priority.
 - Thực hiện partial fill và full fill.
-- Tạo `TradeCreatedEvent`.
+- Tạo event `TradeCreated`.
 - Phát trạng thái Order.
 - Phát dữ liệu thay đổi Order Book.
 - Tạo snapshot.
@@ -322,8 +322,8 @@ Trong MVP, các consumer này có thể chạy trong cùng một process, nhưng
 - Nếu Matching Engine phát event runtime như `OrderPartiallyFilled` hoặc `OrderFilled`, hệ thống chỉ dùng để kiểm tra/reconciliation, không dùng để cập nhật Wallet hoặc Ledger.
 - Kiểm tra event đã được xử lý hay chưa.
 - Order Event Consumer cập nhật trạng thái Order không phát sinh Trade và hoàn/mở khóa số dư khi Order bị từ chối hoặc bị hủy.
-- Trade Settlement Consumer khóa Buy Order, Sell Order và Wallet liên quan.
-- Trade Settlement Consumer tạo Trade, cập nhật Order, cập nhật Wallet, tạo Ledger Entry và thu Trading Fee trong cùng transaction.
+- Trade Settlement Consumer khóa Buy Order, Sell Order và Wallet liên quan, bao gồm Treasury Wallet nhận phí.
+- Trade Settlement Consumer tạo Trade, cập nhật Order, cập nhật Wallet buyer/seller/Treasury, tạo Ledger Entry và thu Trading Fee trong cùng transaction.
 - Ghi Processed Event.
 - Tạo Outbox Event trong cùng transaction với dữ liệu nghiệp vụ.
 - Commit toàn bộ thay đổi tài chính trong một database transaction.
@@ -351,8 +351,9 @@ Outbox Worker giải quyết vấn đề cập nhật database và gửi message
 
 #### Sử dụng cho
 
-- `PlaceOrderCommand`.
-- `CancelOrderCommand`.
+- `PlaceOrder`.
+- `CancelOrder`.
+- `QueryOrderState`.
 - `WithdrawalApproved`.
 - `TradeSettled`.
 - `BalanceUpdated`.
@@ -630,6 +631,7 @@ CancelOrder
 OpenMarket
 SuspendMarket
 CreateSnapshot
+QueryOrderState
 ```
 
 ### 9.3. Event từ Matching Engine
@@ -641,10 +643,15 @@ OrderOpened
 OrderPartiallyFilled
 OrderFilled
 OrderCancelled
+CancelOrderRejected
 TradeCreated
 OrderBookChanged
+SnapshotCreated
+MarketOpened
+MarketSuspended
 EngineReady
 EngineFailed
+OrderStateReported
 ```
 
 ### 9.4. Cấu trúc message chung
@@ -672,7 +679,8 @@ EngineFailed
 | Ledger                             | Ledger Module                        | PostgreSQL                         |
 | Order record                       | Order Module                         | PostgreSQL                         |
 | Order Book runtime                 | Matching Engine                      | Memory + Snapshot                  |
-| Matching sequence                  | Matching Engine                      | Snapshot/Event Log                 |
+| Command Sequence                   | Backend PostgreSQL                   | Snapshot/Event Log                 |
+| Trade Sequence                     | Matching Engine                      | Snapshot/Event Log                 |
 | Trade                              | Settlement Module                    | PostgreSQL                         |
 | Deposit                            | Deposit Module                       | PostgreSQL                         |
 | Withdrawal                         | Withdrawal Module                    | PostgreSQL                         |
@@ -716,7 +724,7 @@ sequenceDiagram
     API-->>FE: Order PENDING
 
     OW->>DB: Đọc Outbox chưa gửi
-    OW->>RS: Gửi PlaceOrderCommand
+    OW->>RS: Gửi PlaceOrder
     RS->>ME: Consume command
     ME->>ME: Match hoặc thêm Order Book
     ME->>RS: Phát Engine Events
@@ -797,7 +805,7 @@ sequenceDiagram
     participant OEC as Order Event Consumer
     participant WS as WebSocket Gateway
 
-    U->>API: DELETE /orders/{id}
+    U->>API: POST /orders/{id}/cancel
     API->>DB: Kiểm tra quyền sở hữu
     API->>DB: Order → CANCEL_PENDING
     API->>DB: Tạo Outbox CancelOrder
@@ -805,8 +813,8 @@ sequenceDiagram
     API-->>U: Cancel request accepted
 
     OW->>DB: Đọc Outbox chưa gửi
-    OW->>RS: Gửi CancelOrderCommand
-    RS->>ME: CancelOrderCommand
+    OW->>RS: Gửi CancelOrder
+    RS->>ME: CancelOrder
     ME->>ME: Xóa Remaining Quantity
     ME->>RS: OrderCancelled
     RS->>OEC: Consume OrderCancelled
@@ -822,6 +830,23 @@ sequenceDiagram
 ```
 
 Nếu Order đã được khớp toàn bộ trước khi Cancel Command được xử lý, Engine trả về trạng thái không thể hủy.
+
+---
+
+### 13.1. Reconciliation cho Order PENDING quá lâu
+
+Scheduled Worker định kỳ kiểm tra Order ở trạng thái `PENDING` quá thời gian cấu hình.
+
+Luồng xử lý:
+
+1. Worker kiểm tra Outbox `PlaceOrder` tương ứng.
+2. Nếu command chưa được publish, Outbox Worker gửi lại command với cùng `messageId`.
+3. Nếu command đã publish nhưng chưa có phản hồi từ Engine, Worker tạo Outbox `QueryOrderState`.
+4. Matching Engine xử lý `QueryOrderState` theo `commandSequence` của Trading Pair.
+5. Engine phát `OrderStateReported`.
+6. Backend dùng kết quả để xác minh trạng thái Order hoặc đưa Trading Pair vào reconciliation nếu dữ liệu lệch.
+
+Worker không được tự mở khóa số dư khi chưa xác định được Order có tồn tại trong Engine hay không.
 
 ---
 
@@ -961,14 +986,15 @@ Các nghiệp vụ cần idempotency:
 | Nghiệp vụ            | Khóa chống trùng                      |
 | -------------------- | ------------------------------------- |
 | Tạo Order            | User ID + Idempotency Key             |
-| Place Order Command  | commandId                             |
-| Cancel Order Command | commandId                             |
-| Settlement Trade     | tradeId hoặc eventId                  |
+| Place Order Command  | messageId, chính là commandId         |
+| Cancel Order Command | messageId, chính là commandId         |
+| Settlement delivery  | consumerName + messageId              |
+| Settlement nghiệp vụ | tradeId + engineMatchId               |
 | Deposit              | chainId + txHash + logIndex           |
 | Withdrawal           | User ID + Idempotency Key             |
 | Withdrawal broadcast | withdrawalId + txHash hoặc nonce      |
 | Ledger Entry         | Reference + Entry Type + Balance Type |
-| Outbox Event         | eventId                               |
+| Outbox Message       | messageId                             |
 
 ---
 

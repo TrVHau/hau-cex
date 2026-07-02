@@ -23,38 +23,43 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 
 ## 3. Thuật ngữ về ví và số dư
 
-| STT | Thuật ngữ      | Tên trong hệ thống | Định nghĩa                                                                                     |
-| --: | -------------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-|   1 | Ví nội bộ      | Wallet             | Bản ghi thể hiện số dư của một User đối với một Asset trong hệ thống.                          |
-|   2 | Số dư khả dụng | Available Balance  | Số tài sản người dùng có thể sử dụng để đặt lệnh hoặc rút.                                     |
-|   3 | Số dư bị khóa  | Locked Balance     | Số tài sản đang được giữ để phục vụ lệnh đang mở hoặc yêu cầu rút đang xử lý.                  |
-|   4 | Tổng số dư     | Total Balance      | Tổng của Available Balance và Locked Balance.                                                  |
-|   5 | Sổ cái         | Ledger             | Hệ thống ghi lại toàn bộ biến động số dư của người dùng.                                       |
-|   6 | Bút toán       | Ledger Entry       | Một bản ghi thay đổi số dư, bao gồm tài sản, số lượng, loại biến động và đối tượng tham chiếu. |
-|   7 | Khóa số dư     | Balance Lock       | Thao tác chuyển một lượng tài sản từ Available Balance sang Locked Balance.                    |
-|   8 | Mở khóa số dư  | Balance Unlock     | Thao tác chuyển tài sản từ Locked Balance trở lại Available Balance.                           |
-|   9 | Quyết toán     | Settlement         | Quá trình cập nhật số dư, ledger, order và trade sau khi lệnh được khớp.                       |
-|  10 | Đối soát       | Reconciliation     | Quá trình kiểm tra tính nhất quán giữa wallet, ledger, order, trade và dữ liệu blockchain.     |
+| STT | Thuật ngữ      | Tên trong hệ thống | Định nghĩa                                                                                         |
+| --: | -------------- | ------------------ | -------------------------------------------------------------------------------------------------- |
+|   1 | Ví nội bộ      | Wallet             | Bản ghi thể hiện số dư của một User đối với một Asset trong hệ thống.                              |
+|   2 | Số dư khả dụng | Available Balance  | Số tài sản người dùng có thể sử dụng để đặt lệnh hoặc rút.                                         |
+|   3 | Số dư bị khóa  | Locked Balance     | Số tài sản đang được giữ để phục vụ lệnh đang mở hoặc yêu cầu rút đang xử lý.                      |
+|   4 | Tổng số dư     | Total Balance      | Tổng của Available Balance và Locked Balance.                                                      |
+|   5 | Sổ cái         | Ledger             | Hệ thống ghi lại toàn bộ biến động số dư của người dùng.                                           |
+|   6 | Bút toán       | Ledger Entry       | Một bản ghi thay đổi số dư, bao gồm tài sản, số lượng, loại biến động và đối tượng tham chiếu.     |
+|   7 | Khóa số dư     | Balance Lock       | Thao tác chuyển một lượng tài sản từ Available Balance sang Locked Balance.                        |
+|   8 | Mở khóa số dư  | Balance Unlock     | Thao tác chuyển tài sản từ Locked Balance trở lại Available Balance.                               |
+|   9 | Quyết toán     | Settlement         | Quá trình cập nhật số dư, ledger, order và trade sau khi lệnh được khớp.                           |
+|  10 | Đối soát       | Reconciliation     | Quá trình kiểm tra tính nhất quán giữa wallet, ledger, order, trade và dữ liệu blockchain.         |
+|  11 | Ví Treasury    | Treasury Wallet    | Wallet nội bộ thuộc Treasury Account role `SYSTEM`, dùng để nhận phí giao dịch và phục vụ đối soát. |
 
 ## 4. Thuật ngữ về lệnh
 
-| STT | Thuật ngữ          | Tên trong hệ thống | Định nghĩa                                                             |
-| --: | ------------------ | ------------------ | ---------------------------------------------------------------------- |
-|   1 | Lệnh               | Order              | Yêu cầu mua hoặc bán một Asset trong một Trading Pair.                 |
-|   2 | Lệnh mua           | Buy Order          | Lệnh mua Base Asset bằng Quote Asset.                                  |
-|   3 | Lệnh bán           | Sell Order         | Lệnh bán Base Asset để nhận Quote Asset.                               |
-|   4 | Lệnh giới hạn      | Limit Order        | Lệnh mua hoặc bán tại một mức giá xác định hoặc tốt hơn.               |
-|   5 | Giá lệnh           | Order Price        | Mức giá do người dùng nhập cho một Limit Order.                        |
-|   6 | Khối lượng lệnh    | Order Quantity     | Tổng số Base Asset mà người dùng muốn mua hoặc bán.                    |
-|   7 | Khối lượng đã khớp | Filled Quantity    | Phần khối lượng của Order đã được giao dịch thành công.                |
-|   8 | Khối lượng còn lại | Remaining Quantity | Phần khối lượng chưa được khớp của Order.                              |
-|   9 | Lệnh đang mở       | Open Order         | Order còn khối lượng chưa khớp và vẫn đang nằm trong Order Book.       |
-|  10 | Hủy lệnh           | Cancel Order       | Thao tác loại Order khỏi Order Book và hoàn lại số dư còn bị khóa.     |
-|  11 | Khớp toàn phần     | Full Fill          | Order được khớp hết toàn bộ khối lượng.                                |
-|  12 | Khớp một phần      | Partial Fill       | Order chỉ được khớp một phần và vẫn còn Remaining Quantity.            |
-|  13 | Maker              | Maker Order        | Order được đưa vào Order Book và tạo thanh khoản trước khi được khớp.  |
-|  14 | Taker              | Taker Order        | Order mới đi vào và khớp ngay với Order đang tồn tại trong Order Book. |
-|  15 | Thứ tự lệnh        | Sequence           | Giá trị tăng dần dùng để xác định thứ tự tiếp nhận Order.              |
+| STT | Thuật ngữ          | Tên trong hệ thống  | Định nghĩa                                                                                                |
+| --: | ------------------ | ------------------- | --------------------------------------------------------------------------------------------------------- |
+|   1 | Lệnh               | Order               | Yêu cầu mua hoặc bán một Asset trong một Trading Pair.                                                    |
+|   2 | Lệnh mua           | Buy Order           | Lệnh mua Base Asset bằng Quote Asset.                                                                     |
+|   3 | Lệnh bán           | Sell Order          | Lệnh bán Base Asset để nhận Quote Asset.                                                                  |
+|   4 | Lệnh giới hạn      | Limit Order         | Lệnh mua hoặc bán tại một mức giá xác định hoặc tốt hơn.                                                  |
+|   5 | Giá lệnh           | Order Price         | Mức giá do người dùng nhập cho một Limit Order.                                                           |
+|   6 | Khối lượng lệnh    | Order Quantity      | Tổng số Base Asset mà người dùng muốn mua hoặc bán.                                                       |
+|   7 | Khối lượng đã khớp | Filled Quantity     | Phần khối lượng của Order đã được giao dịch thành công.                                                   |
+|   8 | Khối lượng còn lại | Remaining Quantity  | Phần khối lượng chưa được khớp của Order.                                                                 |
+|   9 | Lệnh đang mở       | Open Order          | Order còn khối lượng chưa khớp và vẫn đang nằm trong Order Book.                                          |
+|  10 | Hủy lệnh           | Cancel Order        | Thao tác loại Order khỏi Order Book và hoàn lại số dư còn bị khóa.                                        |
+|  11 | Khớp toàn phần     | Full Fill           | Order được khớp hết toàn bộ khối lượng.                                                                   |
+|  12 | Khớp một phần      | Partial Fill        | Order chỉ được khớp một phần và vẫn còn Remaining Quantity.                                               |
+|  13 | Maker              | Maker Order         | Order được đưa vào Order Book và tạo thanh khoản trước khi được khớp.                                     |
+|  14 | Taker              | Taker Order         | Order mới đi vào và khớp ngay với Order đang tồn tại trong Order Book.                                    |
+|  15 | Thứ tự lệnh        | Sequence            | Giá trị tăng dần dùng để xác định thứ tự tiếp nhận Order.                                                 |
+|  16 | Thứ tự Order       | Order Sequence      | Sequence do Backend cấp theo từng Trading Pair, dùng cho Price-Time Priority trong Order Book.            |
+|  17 | Thứ tự Command     | Command Sequence    | Sequence do Backend cấp theo từng Trading Pair, dùng để Matching Engine xử lý tuần tự mọi command.        |
+|  18 | Thứ tự Trade       | Trade Sequence      | Sequence do Matching Engine cấp theo từng Trading Pair, dùng cho thứ tự Trade, settlement và market data. |
+|  19 | Thứ tự Order Book  | Order Book Sequence | Sequence runtime do Matching Engine cấp cho snapshot/delta Order Book gửi frontend.                       |
 
 ## 5. Trạng thái lệnh
 
@@ -94,7 +99,7 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 |   3 | Khối lượng khớp               | Executed Quantity            | Số Base Asset được trao đổi trong một Trade.                                                |
 |   4 | Phí giao dịch                 | Trading Fee                  | Khoản phí được tính cho buyer, seller, maker hoặc taker.                                    |
 |   5 | Giao dịch gần nhất            | Recent Trades                | Danh sách Trade đã settlement mới nhất của một Trading Pair trên Hau CEX.                   |
-|   6 | Giá cuối nội bộ               | Internal Last Price          | Execution Price của Trade đã settlement gần nhất theo Sequence trên Hau CEX.                |
+|   6 | Giá cuối nội bộ               | Internal Last Price          | Execution Price của Trade đã settlement gần nhất theo Trade Sequence trên Hau CEX.          |
 |   7 | Khối lượng giao dịch          | Trading Volume               | Tổng khối lượng đã giao dịch trong một khoảng thời gian.                                    |
 |   8 | Nến giá                       | Candlestick                  | Dữ liệu gồm open, high, low, close và volume; với nguồn `HAU` chỉ dùng Trade đã settlement. |
 |   9 | Giá mở cửa                    | Open Price                   | Giá đầu tiên trong một cây nến.                                                             |
@@ -153,25 +158,25 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 
 ## 11. Thuật ngữ về giao tiếp hệ thống
 
-| STT | Thuật ngữ                 | Tên trong hệ thống        | Định nghĩa                                                                                                 |
-| --: | ------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
-|   1 | Command                   | Command                   | Thông điệp yêu cầu một service thực hiện hành động. Ví dụ `PlaceOrderCommand`.                             |
-|   2 | Event                     | Event                     | Thông điệp thông báo một sự kiện đã xảy ra. Ví dụ `TradeCreatedEvent`.                                     |
-|   3 | Message Broker            | Message Broker            | Thành phần trung gian truyền command và event giữa NestJS và Go engine.                                    |
-|   4 | Redis Streams             | Redis Streams             | Cơ chế lưu và phân phối message được dùng trong phiên bản đầu.                                             |
-|   5 | Consumer                  | Consumer                  | Service đọc và xử lý message từ stream.                                                                    |
-|   6 | Producer                  | Producer                  | Service ghi message vào stream.                                                                            |
-|   7 | Consumer Group            | Consumer Group            | Nhóm consumer phối hợp xử lý message trong Redis Streams.                                                  |
-|   8 | Acknowledge               | ACK                       | Xác nhận một message đã được xử lý thành công.                                                             |
-|   9 | Retry                     | Retry                     | Thử xử lý lại một tác vụ hoặc message bị lỗi.                                                              |
-|  10 | Dead-letter Queue         | DLQ                       | Nơi lưu các message thất bại nhiều lần để kiểm tra riêng.                                                  |
-|  11 | Idempotency               | Idempotency               | Tính chất bảo đảm cùng một request hoặc event được xử lý nhiều lần nhưng chỉ tạo ra một kết quả nghiệp vụ. |
-|  12 | Correlation ID            | Correlation ID            | Mã dùng để theo dõi một luồng xử lý xuyên qua nhiều service.                                               |
-|  13 | Outbox Event              | Outbox Event              | Event được lưu cùng transaction dữ liệu, sau đó được worker gửi đến message broker.                        |
-|  14 | Outbox Worker             | Outbox Worker             | Worker đọc Outbox Event đã commit và gửi đến message broker.                                               |
-|  15 | Engine Event Consumer     | Engine Event Consumer     | Consumer xử lý event phát ra từ Matching Engine.                                                           |
-|  16 | Order Event Consumer      | Order Event Consumer      | Consumer xử lý event Order không phải settlement Trade, ví dụ OrderAccepted hoặc OrderCancelled.           |
-|  17 | Trade Settlement Consumer | Trade Settlement Consumer | Consumer xử lý `TradeCreated` và settlement Trade theo transaction.                                        |
+| STT | Thuật ngữ                 | Tên trong hệ thống        | Định nghĩa                                                                                                                                 |
+| --: | ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+|   1 | Command                   | Command                   | Thông điệp yêu cầu một service thực hiện hành động. `messageType` ví dụ `PlaceOrder`; class/type trong code có thể là `PlaceOrderCommand`. |
+|   2 | Event                     | Event                     | Thông điệp thông báo một sự kiện đã xảy ra. `messageType` ví dụ `TradeCreated`; class/type trong code có thể là `TradeCreatedEvent`.       |
+|   3 | Message Broker            | Message Broker            | Thành phần trung gian truyền command và event giữa NestJS và Go engine.                                                                    |
+|   4 | Redis Streams             | Redis Streams             | Cơ chế lưu và phân phối message được dùng trong phiên bản đầu.                                                                             |
+|   5 | Consumer                  | Consumer                  | Service đọc và xử lý message từ stream.                                                                                                    |
+|   6 | Producer                  | Producer                  | Service ghi message vào stream.                                                                                                            |
+|   7 | Consumer Group            | Consumer Group            | Nhóm consumer phối hợp xử lý message trong Redis Streams.                                                                                  |
+|   8 | Acknowledge               | ACK                       | Xác nhận một message đã được xử lý thành công.                                                                                             |
+|   9 | Retry                     | Retry                     | Thử xử lý lại một tác vụ hoặc message bị lỗi.                                                                                              |
+|  10 | Dead-letter Queue         | DLQ                       | Nơi lưu các message thất bại nhiều lần để kiểm tra riêng.                                                                                  |
+|  11 | Idempotency               | Idempotency               | Tính chất bảo đảm cùng một request hoặc event được xử lý nhiều lần nhưng chỉ tạo ra một kết quả nghiệp vụ.                                 |
+|  12 | Correlation ID            | Correlation ID            | Mã dùng để theo dõi một luồng xử lý xuyên qua nhiều service.                                                                               |
+|  13 | Outbox Event              | Outbox Event              | Event được lưu cùng transaction dữ liệu, sau đó được worker gửi đến message broker.                                                        |
+|  14 | Outbox Worker             | Outbox Worker             | Worker đọc Outbox Event đã commit và gửi đến message broker.                                                                               |
+|  15 | Engine Event Consumer     | Engine Event Consumer     | Consumer xử lý event phát ra từ Matching Engine.                                                                                           |
+|  16 | Order Event Consumer      | Order Event Consumer      | Consumer xử lý event Order không phải settlement Trade, ví dụ OrderAccepted hoặc OrderCancelled.                                           |
+|  17 | Trade Settlement Consumer | Trade Settlement Consumer | Consumer xử lý `TradeCreated` và settlement Trade theo transaction.                                                                        |
 
 ## 12. Thuật ngữ về frontend và realtime
 
@@ -211,5 +216,7 @@ và tài liệu nghiệp vụ sử dụng thuật ngữ thống nhất.
 - Tên struct, class và enum sử dụng `PascalCase`.
 - Tên event sử dụng thì quá khứ, ví dụ `OrderAccepted`, `TradeCreated`.
 - Tên command sử dụng động từ, ví dụ `PlaceOrder`, `CancelOrder`.
+- `messageType` nội bộ dùng tên ngắn như `PlaceOrder` hoặc `TradeCreated`.
+- Tên class/type trong code có thể thêm hậu tố theo ngữ cảnh, ví dụ `PlaceOrderCommand` hoặc `TradeCreatedEvent`.
 - Mã Trading Pair dùng dạng `BTC_USDT` trong code.
 - Dạng hiển thị trên giao diện là `BTC/USDT`.

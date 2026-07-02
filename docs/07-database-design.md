@@ -73,9 +73,9 @@ TIMESTAMPTZ
 
 Frontend chịu trách nhiệm chuyển sang múi giờ hiển thị.
 
-### 2.4. ID sử dụng UUIDv7
+### 2.4. ID sử dụng UUIDv7 và deterministic ID
 
-Các entity nghiệp vụ sử dụng UUIDv7.
+Các entity nghiệp vụ mặc định sử dụng UUIDv7.
 
 Trong PostgreSQL, kiểu cột vẫn là:
 
@@ -86,9 +86,24 @@ UUID
 Quy ước:
 
 - Application service tạo UUIDv7 trước khi insert.
+- Message ID và Correlation ID sử dụng UUIDv7.
 - Nếu môi trường PostgreSQL hỗ trợ `uuidv7()` hoặc extension tương đương, migration có thể đặt `DEFAULT uuidv7()`.
 - Không dùng `gen_random_uuid()` làm default cho business entity mới vì đó là UUIDv4.
 - Các cột FK dùng cùng giá trị UUIDv7 của entity được tham chiếu.
+
+Ngoại lệ:
+
+- `trades.id` / `tradeId` không dùng UUIDv7.
+- `tradeId` được tạo deterministic từ `engineMatchId` để Engine replay cùng một match sau restart vẫn sinh đúng cùng một Trade ID.
+- Công thức:
+
+```text
+engineMatchId = tradingPairId + ":" + commandSequence + ":" + matchIndex
+tradeId = UUIDv5(HAU_CEX_TRADE_NAMESPACE, engineMatchId)
+```
+
+`HAU_CEX_TRADE_NAMESPACE` là namespace UUID cố định dùng chung giữa Go và TypeScript, không được thay đổi giữa các môi trường.
+Tài liệu Matching Engine Design phải định nghĩa giá trị UUID cụ thể của namespace này trước khi implement.
 
 Các trường cần thứ tự tuyệt đối sử dụng `BIGINT`, ví dụ:
 
@@ -202,6 +217,7 @@ audit_logs
 user_role:
 - USER
 - ADMIN
+- SYSTEM
 
 user_status:
 - ACTIVE
@@ -338,6 +354,17 @@ role không được User tự thay đổi
 status chỉ được thay đổi qua nghiệp vụ hợp lệ
 ```
 
+### Treasury Account
+
+Treasury Account là tài khoản nội bộ thuộc role `SYSTEM`.
+
+- Không xuất hiện như User giao dịch thông thường.
+- Không được đăng nhập.
+- Không được tạo session.
+- Không được khóa hoặc chỉnh sửa qua Admin User API thông thường.
+- Được dùng để sở hữu Treasury Wallet phục vụ ghi nhận phí và đối soát Ledger.
+- Wallet của Treasury Account chỉ được Settlement Service cập nhật trong transaction nghiệp vụ hợp lệ.
+
 ### Index
 
 ```sql
@@ -434,24 +461,24 @@ ON login_histories (attempted_email, created_at DESC);
 
 Lưu token được Hau CEX hỗ trợ.
 
-| Cột                      | Kiểu           | Ràng buộc                  |
-| ------------------------ | -------------- | -------------------------- |
-| `id`                     | UUID           | PK                         |
-| `symbol`                 | VARCHAR(20)    | NOT NULL, UNIQUE           |
-| `name`                   | VARCHAR(100)   | NOT NULL                   |
-| `image_url`              | TEXT           | NULL                       |
-| `chain_id`               | BIGINT         | NOT NULL                   |
-| `contract_address`       | VARCHAR(42)    | NOT NULL                   |
-| `decimals`               | SMALLINT       | NOT NULL                   |
+| Cột                      | Kiểu           | Ràng buộc                    |
+| ------------------------ | -------------- | ---------------------------- |
+| `id`                     | UUID           | PK                           |
+| `symbol`                 | VARCHAR(20)    | NOT NULL, UNIQUE             |
+| `name`                   | VARCHAR(100)   | NOT NULL                     |
+| `image_url`              | TEXT           | NULL                         |
+| `chain_id`               | BIGINT         | NOT NULL                     |
+| `contract_address`       | VARCHAR(42)    | NOT NULL                     |
+| `decimals`               | SMALLINT       | NOT NULL                     |
 | `status`                 | `asset_status` | NOT NULL, DEFAULT `INACTIVE` |
-| `deposit_enabled`        | BOOLEAN        | NOT NULL, DEFAULT false    |
-| `withdrawal_enabled`     | BOOLEAN        | NOT NULL, DEFAULT false    |
-| `trading_enabled`        | BOOLEAN        | NOT NULL, DEFAULT false    |
-| `required_confirmations` | INTEGER        | NOT NULL, DEFAULT 3        |
-| `minimum_withdrawal`     | NUMERIC(38,18) | NOT NULL, DEFAULT 0        |
-| `withdrawal_fee`         | NUMERIC(38,18) | NOT NULL, DEFAULT 0        |
-| `created_at`             | TIMESTAMPTZ    | NOT NULL                   |
-| `updated_at`             | TIMESTAMPTZ    | NOT NULL                   |
+| `deposit_enabled`        | BOOLEAN        | NOT NULL, DEFAULT false      |
+| `withdrawal_enabled`     | BOOLEAN        | NOT NULL, DEFAULT false      |
+| `trading_enabled`        | BOOLEAN        | NOT NULL, DEFAULT false      |
+| `required_confirmations` | INTEGER        | NOT NULL, DEFAULT 3          |
+| `minimum_withdrawal`     | NUMERIC(38,18) | NOT NULL, DEFAULT 0          |
+| `withdrawal_fee`         | NUMERIC(38,18) | NOT NULL, DEFAULT 0          |
+| `created_at`             | TIMESTAMPTZ    | NOT NULL                     |
+| `updated_at`             | TIMESTAMPTZ    | NOT NULL                     |
 
 ### Constraint
 
@@ -602,6 +629,17 @@ Dùng cho:
 - Reconciliation.
 
 Row-level lock vẫn là cơ chế chính trong nghiệp vụ tài chính.
+
+### Treasury Wallet
+
+Mỗi Asset có thể có một Treasury Wallet thuộc Treasury Account role `SYSTEM`.
+
+Treasury Wallet dùng để nhận phí giao dịch:
+
+- Buyer Fee được credit vào Treasury Wallet của Base Asset.
+- Seller Fee được credit vào Treasury Wallet của Quote Asset.
+- Mỗi credit phí vào Treasury Wallet phải có Ledger Entry `TRADING_FEE` dương với `reference_type = TRADE`.
+- Treasury Wallet được lock và cập nhật trong cùng settlement transaction với buyer, seller và Trade.
 
 ---
 
@@ -846,11 +884,11 @@ Khi tạo Outbox Engine command, backend phải lock row `engine_command_sequenc
 
 Không dùng lẫn ba loại sequence này:
 
-| Sequence | Nơi lưu | Owner | Mục đích |
-| -------- | ------- | ----- | -------- |
-| Order Sequence | `orders.sequence` | Backend DB transaction | Price-Time Priority trong Order Book |
-| Command Sequence | `outbox_events.command_sequence` | Backend DB transaction | Thứ tự command đi vào Matching Engine theo Trading Pair |
-| Trade Sequence | `trades.sequence` | Matching Engine | Thứ tự Trade đã khớp để settlement, Recent Trades và Hau Market Data |
+| Sequence         | Nơi lưu                          | Owner                  | Mục đích                                                             |
+| ---------------- | -------------------------------- | ---------------------- | -------------------------------------------------------------------- |
+| Order Sequence   | `orders.sequence`                | Backend DB transaction | Price-Time Priority trong Order Book                                 |
+| Command Sequence | `outbox_events.command_sequence` | Backend DB transaction | Thứ tự command đi vào Matching Engine theo Trading Pair              |
+| Trade Sequence   | `trades.sequence`                | Matching Engine        | Thứ tự Trade đã khớp để settlement, Recent Trades và Hau Market Data |
 
 `PlaceOrder` có cả Order Sequence và Command Sequence. `CancelOrder` chỉ có Command Sequence. `TradeCreated` có Trade Sequence và không được dùng Order Sequence làm thứ tự Trade.
 
@@ -931,14 +969,16 @@ UNIQUE (engine_match_id);
 
 ### Quy tắc
 
-- `id` chính là `tradeId` do Matching Engine tạo theo UUIDv7.
+- `id` chính là `tradeId` do Matching Engine tạo deterministic từ `engine_match_id`.
 - `engine_message_id` là `messageId` của `TradeCreated` đã được settlement.
-- `engine_match_id` là khóa nghiệp vụ ổn định do Engine tạo từ dữ liệu deterministic, ví dụ `tradingPairId + commandSequence + matchIndex`.
+- `engine_match_id` là khóa nghiệp vụ ổn định do Engine tạo theo công thức `tradingPairId + ":" + commandSequence + ":" + matchIndex`.
+- `tradeId = UUIDv5(HAU_CEX_TRADE_NAMESPACE, engine_match_id)`.
+- Go và TypeScript phải dùng cùng `HAU_CEX_TRADE_NAMESPACE` và cùng thuật toán UUIDv5 chuẩn để sinh ra cùng `tradeId`.
 - Một `TradeCreated` tương ứng đúng một row trong `trades`.
 - Payload `TradeCreated` phải chứa `engineMatchId`.
 - Nếu một incoming Order khớp với nhiều resting Order, Matching Engine phải phát nhiều `TradeCreated` riêng, mỗi event có `tradeId`, `messageId` và `sequence` riêng.
-- Khi replay cùng một command, Engine phải tạo lại cùng `engine_match_id` cho cùng một match.
-- Settlement Consumer phải chống ghi trùng bằng `engine_match_id`, không chỉ dựa vào `tradeId` hoặc `engine_message_id`, vì UUIDv7 có thể khác nếu Engine replay mà không có durable event journal.
+- Khi replay cùng một command, Engine phải tạo lại cùng `tradeId` và `engine_match_id` cho cùng một match.
+- Settlement Consumer phải chống ghi trùng bằng `engine_match_id`, không chỉ dựa vào `tradeId` hoặc `engine_message_id`.
 - Nếu nhận `TradeCreated` có `engine_match_id` đã tồn tại, Settlement Consumer phải verify payload khớp Trade đã lưu, ghi `processed_events.result_reference_id = trades.id` cho message hiện tại nếu cần, ACK sau commit và không tạo thêm Trade/Ledger/Wallet mutation.
 - Nếu `engine_match_id` đã tồn tại nhưng payload không khớp Trade đã lưu, Consumer phải dừng xử lý và đưa message vào retry/DLQ kèm cảnh báo.
 - Chỉ insert trong Trade Settlement transaction.
@@ -948,6 +988,8 @@ UNIQUE (engine_match_id);
 - Fee rate được snapshot tại thời điểm Trade.
 - Buyer Fee tính bằng Base Asset.
 - Seller Fee tính bằng Quote Asset.
+- Buyer Fee được credit vào Treasury Wallet của Base Asset.
+- Seller Fee được credit vào Treasury Wallet của Quote Asset.
 - Fee amount được làm tròn theo precision của Asset thu phí với quy tắc `ROUND_DOWN`.
 - Nếu cần cấm self-trade, phải bổ sung Business Rule riêng trước khi thêm constraint `buyer_id <> seller_id`.
 
@@ -1032,6 +1074,24 @@ CHECK (status <> 'CREDITED' OR credited_at IS NOT NULL);
 
 - `raw_amount`: giá trị nguyên từ blockchain.
 - `amount`: giá trị đã chuyển theo token decimals để dùng trong PostgreSQL.
+
+### Xử lý blockchain reorganization
+
+Bảng `deposits` đã lưu `block_hash` để Listener phát hiện event bị thay đổi canonical chain.
+
+Reorg trước khi Deposit được `CREDITED`:
+
+- Cập nhật lại `block_hash`, `block_number` và `confirmations` nếu transaction xuất hiện ở block mới.
+- Chuyển trạng thái về `DETECTED` hoặc `CONFIRMING` khi cần chờ confirmation lại.
+- Chuyển sang `FAILED` nếu transaction không còn hợp lệ hoặc không còn thuộc canonical chain theo policy vận hành.
+- Không credit Wallet khi Deposit chưa đủ điều kiện xác nhận.
+
+Reorg sau khi Deposit đã `CREDITED`:
+
+- Không xóa Deposit hoặc Ledger Entry cũ.
+- Tạo cảnh báo nghiêm trọng để vận hành kiểm tra.
+- Tạm dừng nghiệp vụ liên quan nếu cần để tránh phát sinh thêm rủi ro.
+- Thực hiện adjustment hoặc reconciliation bằng nghiệp vụ riêng sau khi xác định nguyên nhân.
 
 ### Index
 
@@ -1651,7 +1711,7 @@ Không tạo Outbox `PlaceOrder` trước khi Order đã có Order Sequence và 
 
 Trong một transaction khi User yêu cầu hủy:
 
-1. Validate User sở hữu Order hoặc Admin có quyền.
+1. Validate User sở hữu Order.
 2. Lock Order.
 3. Kiểm tra Order đang ở `OPEN` hoặc `PARTIALLY_FILLED`.
 4. Lock row `engine_command_sequences` của Trading Pair.
@@ -1706,7 +1766,7 @@ Trong một transaction:
 1. Kiểm tra `(consumer_name, message_id)`.
 2. Nếu `engine_match_id` đã tồn tại, verify payload khớp Trade đã lưu, ghi `processed_events.result_reference_id = trades.id` cho message hiện tại, commit, rồi ACK sau commit mà không cập nhật lại Wallet/Ledger/Order.
 3. Lock Buy Order và Sell Order theo thứ tự ID.
-4. Lock Wallet theo thứ tự `asset_id`, sau đó `user_id`.
+4. Lock Wallet theo thứ tự `asset_id`, sau đó `user_id`, bao gồm Wallet buyer, seller và Treasury.
 5. Insert Trade.
 6. Cập nhật Filled và Remaining Quantity.
 7. Cập nhật `remaining_locked_amount` theo công thức đã chốt:
@@ -1714,9 +1774,16 @@ Trong một transaction:
    - SELL giảm `executed_quantity`.
    - Nếu Order kết thúc thì đặt `remaining_locked_amount = 0`.
 8. Cập nhật trạng thái Order.
-9. Cập nhật Wallet buyer và seller.
-10. Thu phí.
-11. Tạo Ledger Entries.
+   - Nếu trạng thái hiện tại là `CANCEL_PENDING` và `remaining_quantity > 0`, giữ nguyên `CANCEL_PENDING`.
+   - Nếu trạng thái hiện tại là `CANCEL_PENDING` và `remaining_quantity = 0`, chuyển sang `FILLED`.
+   - Không chuyển `CANCEL_PENDING` về `PARTIALLY_FILLED` khi settlement partial fill đến trước `OrderCancelled`.
+9. Cập nhật Wallet buyer, seller và Treasury.
+10. Thu phí vào Treasury Wallet:
+
+- Buyer Fee credit vào Treasury Wallet của Base Asset.
+- Seller Fee credit vào Treasury Wallet của Quote Asset.
+
+11. Tạo Ledger Entries cho mọi biến động, bao gồm Ledger Entry `TRADING_FEE` âm phía User và dương phía Treasury.
 12. Ghi Processed Event.
 13. Tạo Outbox `TradeSettled`, `OrderUpdated`, `BalanceUpdated`.
 14. Commit.
@@ -1850,7 +1917,7 @@ Trong một transaction:
 
 ```text
 1. Order theo ID tăng dần
-2. Wallet theo Asset ID tăng dần
+2. Wallet buyer, seller và Treasury theo Asset ID tăng dần
 3. Wallet cùng Asset theo User ID tăng dần
 4. Các bảng khác
 ```
@@ -1925,6 +1992,8 @@ Tổng Trade Quantity của Order = filled_quantity
 original_quantity = filled_quantity + remaining_quantity
 ```
 
+Khi Order chuyển sang `CANCELLED`, `remaining_quantity` vẫn giữ phần chưa khớp tại thời điểm hủy. Chỉ `remaining_locked_amount` phải về `0` và `status` chuyển sang `CANCELLED`.
+
 ## 11.4. Hau Market Data
 
 ```text
@@ -1962,7 +2031,8 @@ Các điểm cần lưu ý khi dùng Prisma:
 - PostgreSQL `NUMERIC` map sang `Prisma.Decimal`.
 - Không chuyển `Prisma.Decimal` sang JavaScript `number`.
 - `BIGINT` map sang JavaScript `bigint`.
-- Business ID phải là UUIDv7. Với Prisma, ưu tiên generate ID ở application service trước khi `create`.
+- Business ID mặc định là UUIDv7. Với Prisma, ưu tiên generate ID ở application service trước khi `create`.
+- Ngoại lệ `trades.id` / `tradeId` phải dùng UUIDv5 deterministic từ `engineMatchId`, không dùng `uuidv7()` hoặc `@default(uuid())`.
 - Không dùng `@default(uuid())` nếu hàm này sinh UUIDv4.
 - Nếu database hỗ trợ `uuidv7()`, có thể dùng migration SQL thủ công để đặt default tương ứng.
 - API trả Decimal và BigInt dưới dạng string.
@@ -1996,7 +2066,7 @@ Các điểm cần lưu ý khi dùng Prisma:
 017_engine_snapshots
 018_audit_logs
 019_indexes_and_constraints
-020_seed_admin_assets_pairs
+020_seed_admin_treasury_assets_pairs
 ```
 
 ---
