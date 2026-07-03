@@ -1587,16 +1587,21 @@ Luồng chuẩn:
 1. Backend tạo Outbox `CreateSnapshot` với `commandSequence`.
 2. Engine xử lý `CreateSnapshot` tại ranh giới command và phát `SnapshotCreated`.
 3. Snapshot Consumer kiểm tra `(consumer_name, message_id)` trong `processed_events`.
-4. Consumer verify `trading_pair_id`, `last_command_sequence`, `last_order_sequence`, `last_trade_sequence`, `checksum`, `order_count` và schema version.
-5. Trong cùng transaction, Consumer insert `engine_snapshots` và ghi `processed_events`.
-6. Consumer chỉ ACK sau khi commit.
+4. Consumer verify `trading_pair_id`, `last_command_sequence`, `last_order_sequence`, `last_trade_sequence`, `checksum`, `order_count`, canonical `snapshot_payload` và schema version.
+5. Consumer tra business key `UNIQUE (trading_pair_id, last_command_sequence)` trong cùng transaction.
+6. Nếu snapshot chưa tồn tại, Consumer insert `engine_snapshots` và ghi `processed_events`.
+7. Nếu snapshot đã tồn tại, checksum, metadata và canonical payload giống nhau, Consumer chỉ ghi `processed_events` cho message replay hiện tại rồi ACK sau commit; không insert snapshot thứ hai.
+8. Nếu snapshot đã tồn tại nhưng checksum, metadata hoặc canonical payload khác, Consumer không ghi đè row; đưa message vào DLQ với internal error `SNAPSHOT_CONFLICT`, suspend Trading Pair và reconciliation.
+9. Consumer chỉ ACK sau khi transaction commit.
 
-Snapshot Consumer không được mutate Order, Wallet, Ledger hoặc Trade. Nếu snapshot không hợp lệ, message phải retry/DLQ theo chính sách consumer, không tự viết snapshot thay thế.
+Snapshot Consumer không được mutate Order, Wallet, Ledger hoặc Trade. `SNAPSHOT_CONFLICT` là lỗi consumer nội bộ, không phải enum mới của `EngineFailed v1`. Nếu snapshot không hợp lệ, message phải retry/DLQ theo chính sách consumer, không tự viết snapshot thay thế.
 
 ### Khi snapshot lớn
 
 - Lưu file nén vào object storage.
 - Database chỉ lưu `storage_url`, checksum và metadata.
+
+> **MVP (Snapshot v1):** `snapshot_payload` **luôn** được lưu dạng JSONB inline; `storage_url` luôn là `NULL`. Cơ chế external storage chỉ áp dụng khi `snapshot_version >= 2`. Constraint `CHECK (snapshot_payload IS NOT NULL OR storage_url IS NOT NULL)` bảo vệ tính toàn vẹn cho cả hai trường hợp.
 
 ### Index
 

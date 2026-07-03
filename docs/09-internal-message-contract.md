@@ -305,7 +305,7 @@ Canonicalization phải dùng một biểu diễn JSON deterministic giữa Go v
 
 - Key được sắp xếp canonical.
 - Không có whitespace thừa.
-- Decimal string được giữ nguyên dưới dạng string.
+- Decimal string phải được normalize theo mục 7.3 trước khi canonicalize và sau đó được giữ nguyên dưới dạng string.
 - Giá trị string và thứ tự byte của UTF-8 phải ổn định.
 
 Mục tiêu:
@@ -357,14 +357,31 @@ Decimal phải:
 - Không dùng scientific notation.
 - Không có dấu `+`.
 - Không có khoảng trắng.
-- Được normalize trước khi producer tạo payload.
+- Không có leading zero, ngoại trừ chính `0` hoặc phần nguyên `0` của số nhỏ hơn 1.
+- Không có trailing decimal point.
+- Zero luôn serialize thành `"0"`.
+- Được parse và normalize trước khi producer tạo payload, canonical JSON, payload hash hoặc snapshot checksum.
 
-Ví dụ:
+Ví dụ hợp lệ:
 
 ```text
-"2000.150000000000000000"
+"0"
 "0.500000000000000000"
+"2000.150000000000000000"
 ```
+
+Ví dụ không hợp lệ:
+
+```text
+"+1"
+"1e-3"
+"00"
+"01.2"
+"1."
+".5"
+```
+
+Go và TypeScript phải dùng cùng golden test vector cho decimal normalization.
 
 ### 7.4. Enum
 
@@ -592,6 +609,13 @@ Khởi tạo hoặc mở Pair Engine với cấu hình đã được Backend ph�
 - Engine chỉ chuyển Pair Engine sang `READY` sau khi cấu hình hợp lệ và recovery hoàn tất.
 - MVP không hot-update Tick Size, Step Size, Precision hoặc Fee Rate khi market đang `ACTIVE`.
 - Muốn thay đổi cấu hình matching-critical: suspend market, bảo đảm trạng thái an toàn, cập nhật cấu hình rồi mở lại bằng `OpenMarket` mới.
+- **Idempotency (cùng config):** Nếu `OpenMarket` gửi đúng cấu hình hiện tại của Pair Engine (ConfigHash khớp), Engine phát `MarketOpened` mà không reset Order Book.
+- **Config khác khi Pair đang `READY`:** Engine từ chối với `EngineFailed(MARKET_CONFIG_INVALID)`. Backend phải suspend Pair trước khi gửi cấu hình mới.
+- **Config khác khi Pair đang `SUSPENDED` (safe-transition rules):**
+  - `tradingPairId`, Base/Quote Asset ID và `decimals` không được thay đổi.
+  - Nếu thay đổi `pricePrecision`, `quantityPrecision`, `tickSize`, hoặc `stepSize` thì Order Book phải **rỗng** tại thời điểm mở lại.
+  - `minimumQuantity` / `minimumNotional` mới chỉ áp dụng cho Order đặt sau khi mở lại.
+  - Fee Rate mới chỉ áp dụng cho Trade khớp sau khi mở lại; Trade cũ giữ nguyên fee rate đã phát trong `TradeCreated`.
 
 ### Kết quả
 
@@ -694,6 +718,12 @@ Hỏi trạng thái hiện tại của một Order trong Engine khi Backend cầ
 OrderStateReported
 EngineFailed
 ```
+
+### Lưu ý
+
+- `QueryOrderState` là **ordered command**: Backend phải cấp `commandSequence` hợp lệ từ bảng `engine_command_sequences`, giống `PlaceOrder` và `CancelOrder`. Không cấp sequence → Engine báo `COMMAND_SEQUENCE_GAP`.
+- Command này không thay đổi Order Book, không tăng `bookSequence` hay `lastTradeSequence`.
+- Engine vẫn xử lý `QueryOrderState` khi Pair đang `SUSPENDED`.
 
 ---
 
@@ -924,7 +954,8 @@ INTERNAL_ENGINE_ERROR
 - Không mở khóa số dư chỉ vì nhận event này.
 - `ORDER_ALREADY_FILLED`: chờ các `TradeCreated` trước đó được settlement; Order cuối cùng phải trở thành `FILLED`.
 - `ORDER_ALREADY_CANCELLED`: xử lý idempotent nếu PostgreSQL đã `CANCELLED`; nếu chưa, yêu cầu reconciliation.
-- `ORDER_NOT_FOUND`: suspend Trading Pair và reconciliation.
+- `ORDER_NOT_FOUND`: suspend Trading Pair và reconciliation. **Không tự unlock balance.**
+  > **Tombstone sau restart:** Engine không persist Tombstone (fingerprint FILLED/CANCELLED) trong Snapshot v1. Sau khi Engine restart, nếu Tombstone của một Order đã bị purge (vượt giới hạn lưu trữ hoặc nằm ngoài cửa sổ CommandDistance), Engine trả `ORDER_NOT_FOUND` thay vì `ORDER_ALREADY_FILLED` hay `ORDER_ALREADY_CANCELLED`. Hành động xử lý vẫn là: **suspend Trading Pair + reconciliation**.
 - `MARKET_SUSPENDED`:
   - Không mở khóa số dư.
   - Giữ Order ở trạng thái `CANCEL_PENDING`.
@@ -1107,10 +1138,24 @@ Mỗi phần tử có dạng:
     "engineState": "READY",
     "bookSequence": "8452",
     "marketConfig": {
+      "tradingPairId": "0197...",
+      "market": "ETH_USDT",
+      "baseAsset": {
+        "id": "0197...",
+        "symbol": "ETH",
+        "decimals": 18
+      },
+      "quoteAsset": {
+        "id": "0197...",
+        "symbol": "USDT",
+        "decimals": 18
+      },
       "pricePrecision": 2,
       "quantityPrecision": 4,
       "tickSize": "0.010000000000000000",
       "stepSize": "0.000100000000000000",
+      "minimumQuantity": "0.001000000000000000",
+      "minimumNotional": "10.000000000000000000",
       "makerFeeRate": "0.0010000000",
       "takerFeeRate": "0.0015000000"
     },
@@ -1131,9 +1176,15 @@ Mỗi phần tử có dạng:
     ],
     "asks": []
   },
-  "createdAt": "2026-07-01T10:35:00.020Z"
+  "createdAt": "2026-07-01T10:35:00.000Z"
 }
 ```
+
+### Snapshot schema
+
+`snapshotPayload.marketConfig` dùng đúng toàn bộ schema matching của `OpenMarket v1`, gồm Asset identity/decimals, precision, tick/step, minimum và fee rate. Snapshot phải tự chứa toàn bộ config cần cho recovery; Recovery Coordinator không được âm thầm ghi đè config từ nguồn ngoài snapshot.
+
+`SnapshotCreated v1` không chứa tombstone. Muốn persist tombstone phải nâng version contract.
 
 ### Snapshot Consumer
 
@@ -1141,7 +1192,10 @@ Mỗi phần tử có dạng:
 - Verify Trading Pair và sequence.
 - Recalculate checksum.
 - Verify `orderCount`.
-- Insert `engine_snapshots` và `processed_events` trong cùng transaction.
+- Xử lý idempotent theo business key `tradingPairId + lastCommandSequence`, không chỉ theo `messageId`.
+- Nếu row đã tồn tại và checksum cùng canonical snapshot payload giống nhau: ghi `processed_events` cho message mới, không insert snapshot thứ hai, commit rồi ACK.
+- Nếu row đã tồn tại nhưng checksum, metadata hoặc canonical payload khác: không ghi đè; đưa DLQ với internal error `SNAPSHOT_CONFLICT`, suspend Pair và reconciliation.
+- Khi chưa tồn tại, insert `engine_snapshots` và `processed_events` trong cùng transaction.
 - Không mutate Order, Wallet, Ledger hoặc Trade.
 - Chỉ ACK sau commit.
 
@@ -1245,7 +1299,7 @@ Khi lỗi ảnh hưởng tính đúng đắn của Order Book, Trading Pair ph�
   "filledQuantity": "0",
   "remainingQuantity": "0.500000000000000000",
   "lastProcessedCommandSequence": "1055",
-  "reportedAt": "2026-07-01T10:36:00.010Z"
+  "reportedAt": "2026-07-01T10:36:00.000Z"
 }
 ```
 
@@ -1485,6 +1539,28 @@ Backend chỉ `XACK` sau khi:
 Outbox Worker chỉ chuyển row sang `PUBLISHED` sau khi Redis `XADD` thành công.
 
 Retry publish phải giữ nguyên `messageId` và payload.
+
+## 13.4. Timestamp trong Engine Event
+
+Để đảm bảo **determinism** khi recovery replay cùng Command Log, Engine phải lấy timestamp payload từ `logicalCommandTime` — là giá trị `envelope.occurredAt` của Command đang xử lý — thay vì wall clock:
+
+| Event field | Nguồn |
+|---|---|
+| `acceptedAt` | `logicalCommandTime` |
+| `openedAt` (OrderOpened) | `logicalCommandTime` |
+| `matchedAt` | `logicalCommandTime` |
+| `updatedAt` | `logicalCommandTime` |
+| `filledAt` | `logicalCommandTime` |
+| `changedAt` | `logicalCommandTime` |
+| `openedAt` (MarketOpened) | `logicalCommandTime` |
+| `suspendedAt` | `logicalCommandTime` |
+| `readyAt` | `logicalCommandTime` |
+| `failedAt` | `logicalCommandTime` |
+| `reportedAt` | `logicalCommandTime` |
+| `cancelledAt` | `CancelOrder.requestedAt`, fallback `logicalCommandTime` |
+| `createdAt` (SnapshotCreated) | `CreateSnapshot.requestedAt`, fallback `logicalCommandTime` |
+
+Engine **không được** dùng `time.Now()` (wall clock) cho payload timestamp. Wall clock chỉ dùng cho metrics và observability nội bộ.
 
 ---
 
