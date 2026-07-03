@@ -128,12 +128,16 @@ hau-cex/
 ├── apps/
 │   ├── web/
 │   └── backend/
+│       ├── src/
+│       └── prisma/
+│           ├── schema.prisma
+│           ├── migrations/
+│           └── seed.ts
 ├── services/
 │   └── matching-engine/
 ├── contracts/
 ├── packages/
 │   └── shared-types/
-├── prisma/
 ├── docs/
 ├── infrastructure/
 ├── tests/
@@ -143,13 +147,13 @@ hau-cex/
 └── README.md
 ```
 
-Có thể đặt Prisma tại:
+Prisma chỉ đặt trong `apps/backend/prisma/`.
 
-```text
-apps/backend/prisma/
-```
+Phase 0 chỉ scaffold React app:
 
-khi bắt đầu code Backend.
+- Vite chạy được.
+- Lint chạy được.
+- Không làm giao diện nghiệp vụ.
 
 ### Tests
 
@@ -513,6 +517,8 @@ Kết nối Backend và Matching Engine qua Redis Streams.
 Backend Worker:
 
 ```text
+- Market bootstrap.
+- Tạo Outbox OpenMarket cho các Trading Pair được seed.
 - Outbox poller.
 - Publish Redis Stream.
 - Retry metadata.
@@ -534,6 +540,8 @@ Backend Engine Event Consumer:
 
 ```text
 - Consume stream:engine:events.
+- Consume MarketOpened.
+- Sau MarketOpened, chuyển DB Trading Pair sang READY.
 - Một active consumer cho Core MVP.
 - Dispatch event handler.
 - ACK sau commit.
@@ -557,7 +565,11 @@ Backend Engine Event Consumer:
 Luồng sau chạy được:
 
 ```text
-POST /orders
+DB Market SUSPENDED
+→ Outbox OpenMarket
+→ Engine MarketOpened
+→ DB Market READY
+→ POST /orders
 → Outbox
 → Redis
 → Matching Engine
@@ -707,6 +719,12 @@ Frontend nhận đúng dữ liệu public và private sau commit.
 
 ```text
 - Order Book REST endpoint.
+- Consume OrderBookChanged.
+- So sánh bookSequence để bỏ snapshot cũ.
+- Lưu latest snapshot vào Redis.
+- Redis key: cache:orderbook:{tradingPairId}.
+- REST Order Book đọc snapshot từ Redis.
+- Phát orderbook.update sau khi lưu snapshot.
 - Recent Trades endpoint.
 - Market Detail.
 - Last Price.
@@ -726,6 +744,19 @@ Frontend nhận đúng dữ liệu public và private sau commit.
 TradeCreated != public trade
 TradeSettled → public trade.created
 ```
+
+Order Book snapshot:
+
+```text
+incoming.bookSequence <= cached.bookSequence
+→ bỏ qua event cũ hoặc duplicate
+
+incoming.bookSequence > cached.bookSequence
+→ cập nhật Redis
+→ phát orderbook.update
+```
+
+REST Order Book và WebSocket `orderbook.update` phải dùng cùng latest snapshot.
 
 ### Tests
 
