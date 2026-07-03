@@ -18,16 +18,17 @@ Redis Streams chỉ là transport. PostgreSQL mới là nguồn dữ liệu tài
 stream:engine:commands
 stream:engine:events
 stream:market:events
+stream:blockchain:events
 stream:dead-letter
 ```
 
 Consumer group:
 
-| Stream | Consumer Group |
-| ------ | -------------- |
-| `stream:engine:commands` | `matching-engine-v1` |
-| `stream:engine:events` | `backend-engine-events-v1` |
-| `stream:market:events` | `market-websocket-fanout-v1` |
+| Stream                     | Consumer Group                                   |
+| -------------------------- | ------------------------------------------------ |
+| `stream:engine:commands`   | `matching-engine-v1`                             |
+| `stream:engine:events`     | `backend-engine-events-v1`                       |
+| `stream:market:events`     | `market-websocket-fanout-v1`                     |
 | `stream:blockchain:events` | `blockchain-deposit-v1` (khi triển khai Deposit) |
 
 ---
@@ -53,8 +54,10 @@ Quy tắc:
 
 - `messageId` bắt buộc UUIDv7.
 - `correlationId` bắt buộc UUIDv7.
-- `commandSequence` là decimal string.
+- `commandSequence` là optional decimal string.
 - `commandSequence` chỉ nằm trong envelope, không lặp trong payload.
+- `commandSequence` bắt buộc với Engine Command và Engine Event sinh ra từ Engine Command.
+- `commandSequence` không dùng với Domain Event hoặc Blockchain Event.
 - Engine message dùng `partitionKey = tradingPairId`.
 - Retry cùng message phải giữ nguyên `messageId`.
 - Redis Stream ID không được dùng làm business ID.
@@ -180,6 +183,12 @@ MarketOpened
 EngineFailed
 ```
 
+Backend flow:
+
+1. PostgreSQL vẫn giữ Trading Pair `SUSPENDED`.
+2. Backend tạo Outbox `OpenMarket`.
+3. Khi nhận `MarketOpened`, Backend chuyển Trading Pair trong PostgreSQL sang `READY`.
+
 ---
 
 ## 9. `SuspendMarket` v1
@@ -201,6 +210,13 @@ Kết quả:
 MarketSuspended
 EngineFailed
 ```
+
+Backend flow:
+
+1. Trong một transaction, Backend chuyển Trading Pair trong PostgreSQL sang `SUSPENDED`.
+2. Backend tạo Outbox `SuspendMarket`.
+3. Khi nhận `MarketSuspended`, Backend ghi nhận Engine đã suspend.
+4. `PlaceOrder` bị chặn ngay khi DB đã `SUSPENDED`.
 
 Khi market suspended:
 
@@ -260,7 +276,7 @@ Backend consumer:
 
 - Chỉ chuyển `PENDING -> REJECTED`.
 - Mở khóa số dư đã lock.
-- Tạo Ledger `ORDER_UNLOCK`.
+- Tạo 2 Ledger Entry `ORDER_UNLOCK`: `LOCKED -amount`, `AVAILABLE +amount`.
 
 ---
 
@@ -321,13 +337,17 @@ Rules:
 - Settlement chống trùng bằng `engineMatchId`.
 - Engine không tính fee.
 - Settlement Backend đọc Fee Rate từ Trading Pair và tự tính fee.
+- Backend lấy `userId`, `tradingPairId` và `side` từ Order trong PostgreSQL.
+- `buyerUserId` và `sellerUserId` từ Engine chỉ dùng để verify.
+- Backend phải kiểm tra `currentRemainingQuantity - executedQuantity == remainingQuantity` tương ứng trong `TradeCreated`.
+- Nếu dữ liệu không khớp: rollback, suspend Market và reconciliation.
 
 Settlement consumer phải làm trong một transaction:
 
 1. Check `processed_events`.
 2. Check `engineMatchId`.
-3. Lock Buy Order và Sell Order.
-4. Lock Wallet buyer, seller và Treasury.
+3. Lock Buy Order và Sell Order theo `id` tăng dần.
+4. Lock Wallet buyer, seller và Treasury theo `id` tăng dần.
 5. Insert Trade.
 6. Update Order.
 7. Update Wallet.
@@ -362,7 +382,7 @@ Backend consumer:
 
 - Chỉ apply nếu PostgreSQL đang `CANCEL_PENDING`.
 - Unlock remaining locked amount.
-- Tạo Ledger `ORDER_UNLOCK`.
+- Tạo 2 Ledger Entry `ORDER_UNLOCK`: `LOCKED -amount`, `AVAILABLE +amount`.
 - Chuyển Order sang `CANCELLED`.
 
 ---
@@ -376,9 +396,8 @@ Payload:
   "tradingPairId": "0197...",
   "market": "HAU_USDT",
   "orderId": "0197...",
-  "reasonCode": "ORDER_ALREADY_FILLED",
-  "reason": "Order no longer has remaining quantity.",
-  "engineOrderStatus": "FILLED",
+  "reasonCode": "ORDER_NOT_FOUND",
+  "reason": "Order is not active in engine order book.",
   "rejectedAt": "2026-07-01T10:31:00.010Z"
 }
 ```
@@ -387,8 +406,6 @@ Payload:
 
 ```text
 ORDER_NOT_FOUND
-ORDER_ALREADY_FILLED
-ORDER_ALREADY_CANCELLED
 MARKET_NOT_READY
 INTERNAL_ENGINE_ERROR
 ```
@@ -396,9 +413,10 @@ INTERNAL_ENGINE_ERROR
 Backend consumer:
 
 - Không mở khóa số dư chỉ vì nhận event này.
-- `ORDER_ALREADY_FILLED`: chờ `TradeCreated` settlement, Order cuối cùng phải là `FILLED`.
-- `ORDER_ALREADY_CANCELLED`: idempotent nếu PostgreSQL đã `CANCELLED`; nếu chưa thì reconciliation.
-- `ORDER_NOT_FOUND`: suspend Trading Pair và reconciliation.
+- `ORDER_NOT_FOUND` + DB Order `FILLED`: ACK idempotent.
+- `ORDER_NOT_FOUND` + DB Order `CANCELLED`: ACK idempotent.
+- `ORDER_NOT_FOUND` + DB Order `CANCEL_PENDING`: suspend Market và reconciliation.
+- `MARKET_NOT_READY`: giữ Order `CANCEL_PENDING`, suspend Market và operator xử lý thủ công.
 
 ---
 
@@ -411,12 +429,8 @@ Payload:
   "tradingPairId": "0197...",
   "market": "HAU_USDT",
   "bookSequence": "9001",
-  "bids": [
-    ["1.000000000000000000", "100.000000000000000000", 2]
-  ],
-  "asks": [
-    ["1.100000000000000000", "50.000000000000000000", 1]
-  ],
+  "bids": [["1.000000000000000000", "100.000000000000000000", 2]],
+  "asks": [["1.100000000000000000", "50.000000000000000000", 1]],
   "changedAt": "2026-07-01T10:30:00.012Z"
 }
 ```
@@ -485,10 +499,14 @@ INTERNAL_ENGINE_ERROR
 
 Backend consumer khi nhận `EngineFailed`:
 
-- Chuyển Trading Pair sang `SUSPENDED` trong PostgreSQL.
+- Matching Engine chuyển Pair Engine runtime sang `FAILED`.
+- Backend chuyển Trading Pair trong PostgreSQL sang `SUSPENDED`.
 - Không cho phép Order mới cho đến khi reconciliation hoàn tất.
+- `FAILED` là trạng thái kỹ thuật trong memory của Go Engine.
+- `SUSPENDED` là trạng thái nghiệp vụ được lưu trong PostgreSQL.
+- Core MVP yêu cầu operator reset hoặc reconciliation thủ công.
 - `COMMAND_SEQUENCE_GAP`: điều tra và vá gap trước khi recovery.
-- `EVENT_PUBLISH_FAILED`: restart Engine và chờ recovery.
+- `EVENT_PUBLISH_FAILED`: không nhận command mới, operator kiểm tra Redis và Engine log.
 - `MARKET_CONFIG_INVALID`: kiểm tra lại cấu hình `OpenMarket`.
 - `INTERNAL_ENGINE_ERROR`: yêu cầu operator can thiệp.
 
@@ -526,6 +544,54 @@ BalanceUpdated
 
 `DepositUpdated` phát sau commit khi triển khai Deposit.
 
+### `TradeSettled`
+
+Payload tối thiểu:
+
+```json
+{
+  "tradeId": "0197...",
+  "tradingPairId": "0197...",
+  "market": "HAU_USDT",
+  "executionPrice": "1.000000000000000000",
+  "executedQuantity": "100.000000000000000000",
+  "tradeSequence": "5001",
+  "matchedAt": "2026-07-01T10:30:00.011Z",
+  "settledAt": "2026-07-01T10:30:00.050Z"
+}
+```
+
+### `OrderUpdated`
+
+Payload tối thiểu:
+
+```json
+{
+  "userId": "0197...",
+  "orderId": "0197...",
+  "status": "PARTIALLY_FILLED",
+  "filledQuantity": "50.000000000000000000",
+  "remainingQuantity": "50.000000000000000000",
+  "remainingLockedAmount": "50.000000000000000000",
+  "updatedAt": "2026-07-01T10:30:00.050Z"
+}
+```
+
+### `BalanceUpdated`
+
+Payload tối thiểu:
+
+```json
+{
+  "userId": "0197...",
+  "assetId": "0197...",
+  "availableBalance": "1000.000000000000000000",
+  "lockedBalance": "50.000000000000000000",
+  "operationId": "0197...",
+  "updatedAt": "2026-07-01T10:30:00.050Z"
+}
+```
+
 `TradeCreated` từ Engine chưa được dùng làm public Recent Trade.
 
 Chỉ `TradeSettled` mới được dùng cho:
@@ -544,10 +610,15 @@ Mỗi consumer phải ghi:
 consumerName + messageId
 ```
 
-Nếu đã xử lý message:
+Mỗi row `processed_events` phải lưu `payloadHash`.
 
-- Payload/result giống nhau: ACK lại.
-- Payload mâu thuẫn: dừng xử lý và đưa vào dead-letter.
+Flow:
+
+```text
+messageId chưa tồn tại -> xử lý -> lưu payloadHash
+messageId tồn tại + payloadHash giống -> ACK idempotent
+messageId tồn tại + payloadHash khác -> dead-letter
+```
 
 Trade Settlement phải kiểm tra thêm:
 

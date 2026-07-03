@@ -163,10 +163,19 @@ GET /api/v1/markets/:symbol
 
 Core MVP có thể trả `lastPrice`, `bestBid` và `bestAsk`.
 
+`bestBid` và `bestAsk` lấy từ latest Order Book snapshot trong Redis.
+`lastPrice` lấy từ Trade đã settlement trong PostgreSQL.
+
 ### Order Book
 
 ```http
 GET /api/v1/markets/:symbol/order-book?depth=50
+```
+
+Backend đọc latest snapshot từ Redis:
+
+```text
+cache:orderbook:{tradingPairId}
 ```
 
 Response:
@@ -190,6 +199,8 @@ GET /api/v1/markets/:symbol/trades?limit=50
 ```
 
 Chỉ trả Trade đã settlement.
+
+Recent Trades đọc từ PostgreSQL Trade đã settlement.
 
 ### Chart (Candlestick)
 
@@ -380,6 +391,36 @@ Ticker 24h có thể gồm:
 GET /api/v1/deposits/config?asset=USDT
 ```
 
+### Create Deposit Intent
+
+```http
+POST /api/v1/deposits/intents
+```
+
+```json
+{
+  "asset": "USDT",
+  "depositorAddress": "0x1234..."
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "depositId": "0197...",
+    "asset": "USDT",
+    "chainId": "31337",
+    "tokenAddress": "0xToken...",
+    "vaultAddress": "0xVault...",
+    "accountReference": "0x8fa3...",
+    "expiresAt": "2026-07-01T11:00:00.000Z"
+  },
+  "requestId": "0197..."
+}
+```
+
 ### My Deposits
 
 ```http
@@ -449,6 +490,18 @@ Rule:
 - Cùng User + cùng key + cùng payload: trả lại resource cũ.
 - Cùng User + cùng key + payload khác: trả lỗi `IDEMPOTENCY_CONFLICT`.
 
+Backend so sánh payload bằng SHA-256 từ payload đã canonicalize:
+
+```text
+symbol|side|type|price|quantity
+```
+
+Ví dụ:
+
+```text
+SHA-256("HAU_USDT|BUY|LIMIT|1.000000000000000000|100.000000000000000000")
+```
+
 ---
 
 ## 13. Error Code Chính
@@ -472,14 +525,14 @@ INTERNAL_ERROR
 
 ## 14. Rate Limit Gợi Ý
 
-| Nhóm | Giới hạn |
-| ---- | -------- |
-| Login | 5 request/phút/IP + email |
-| Refresh | 10 request/phút/session |
-| Public Market API | 120 request/phút/IP |
-| Create Order | 20 request/giây/User |
-| Cancel Order | 20 request/giây/User |
-| Admin mutation | 30 request/phút/Admin |
+| Nhóm                | Giới hạn                  |
+| ------------------- | ------------------------- |
+| Login               | 5 request/phút/IP + email |
+| Refresh             | 10 request/phút/session   |
+| Public Market API   | 120 request/phút/IP       |
+| Create Order        | 20 request/giây/User      |
+| Cancel Order        | 20 request/giây/User      |
+| Admin mutation      | 30 request/phút/Admin     |
 | WebSocket subscribe | 30 action/phút/connection |
 
 ---

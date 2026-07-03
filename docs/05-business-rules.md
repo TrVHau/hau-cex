@@ -14,10 +14,10 @@ MVP chỉ xử lý token test và không dùng cho tài sản thật.
 
 Hệ thống có ba role:
 
-| Role | Ý nghĩa |
-| ---- | ------- |
-| `USER` | Người dùng giao dịch. |
-| `ADMIN` | Người vận hành hệ thống. |
+| Role     | Ý nghĩa                        |
+| -------- | ------------------------------ |
+| `USER`   | Người dùng giao dịch.          |
+| `ADMIN`  | Người vận hành hệ thống.       |
 | `SYSTEM` | Tài khoản nội bộ cho Treasury. |
 
 Rule:
@@ -45,6 +45,12 @@ Rule:
 - Khi Market `SUSPENDED`, Engine vẫn xử lý `CancelOrder`.
 - Open Order được giữ nguyên khi Market suspend.
 - User có thể chủ động hủy Order để giải phóng Locked Balance.
+
+Market Open/Suspend:
+
+- Open: PostgreSQL vẫn `SUSPENDED`, tạo Outbox `OpenMarket`, nhận `MarketOpened` rồi mới chuyển DB sang `READY`.
+- Suspend: trong một transaction chuyển DB sang `SUSPENDED` và tạo Outbox `SuspendMarket`.
+- Khi Admin yêu cầu suspend, `PlaceOrder` bị chặn ngay ở Backend vì DB đã `SUSPENDED`.
 
 ---
 
@@ -107,6 +113,31 @@ Mỗi Ledger Entry phải có:
 
 Mỗi nghiệp vụ tài chính phải có `operationId` để gom các Ledger Entry cùng transaction.
 
+Ledger `amount` là signed delta:
+
+- Credit balance -> `amount > 0`.
+- Debit balance -> `amount < 0`.
+
+Mỗi cột Wallet thay đổi phải có một Ledger delta tương ứng.
+Vì vậy `ORDER_LOCK` và `ORDER_UNLOCK` mỗi nghiệp vụ tạo 2 Ledger Entry,
+không phải một.
+
+Ví dụ `ORDER_LOCK` khi khóa `100 USDT`:
+
+```text
+AVAILABLE: -100 USDT
+LOCKED:    +100 USDT
+entryType: ORDER_LOCK
+```
+
+Ví dụ `ORDER_UNLOCK` khi mở khóa `100 USDT`:
+
+```text
+LOCKED:    -100 USDT
+AVAILABLE: +100 USDT
+entryType: ORDER_UNLOCK
+```
+
 ---
 
 ## 6. Order
@@ -147,6 +178,13 @@ REJECTED
 
 User chỉ được cancel Order của chính mình.
 
+Invariant remaining locked:
+
+```text
+BUY remainingLockedAmount = limitPrice * remainingQuantity
+SELL remainingLockedAmount = remainingQuantity
+```
+
 ---
 
 ## 7. Lock Balance Khi Đặt Order
@@ -169,7 +207,7 @@ Trong transaction tạo Order:
 2. Kiểm tra `availableBalance >= lockedAmount`.
 3. `availableBalance -= lockedAmount`.
 4. `lockedBalance += lockedAmount`.
-5. Tạo Ledger `ORDER_LOCK`.
+5. Tạo 2 Ledger Entry `ORDER_LOCK`: `AVAILABLE -lockedAmount`, `LOCKED +lockedAmount`.
 6. Tạo Order `PENDING`.
 7. Tạo Outbox `PlaceOrder`.
 
@@ -321,8 +359,8 @@ Settlement phải atomic trong một PostgreSQL transaction:
 
 1. Check `processed_events`.
 2. Check `engineMatchId`.
-3. Lock Buy Order và Sell Order.
-4. Lock Wallet buyer, seller và Treasury.
+3. Lock Buy Order và Sell Order theo `id` tăng dần.
+4. Lock Wallet buyer, seller và Treasury theo `id` tăng dần.
 5. Insert Trade.
 6. Cập nhật Order.
 7. Cập nhật Wallet.
@@ -332,6 +370,15 @@ Settlement phải atomic trong một PostgreSQL transaction:
 11. Commit.
 
 Nếu bất kỳ bước nào lỗi, transaction rollback toàn bộ.
+
+Backend không tin hoàn toàn dữ liệu từ Engine.
+
+Settlement Backend phải:
+
+- Lấy `userId`, `tradingPairId` và `side` từ Order trong PostgreSQL.
+- Chỉ dùng `buyerUserId` và `sellerUserId` từ Engine để verify.
+- Kiểm tra `currentRemainingQuantity - executedQuantity == remainingQuantity` tương ứng trong `TradeCreated`.
+- Nếu dữ liệu không khớp: rollback, suspend Market và yêu cầu reconciliation.
 
 ---
 
@@ -371,6 +418,30 @@ MVP:
 - Buyer fee credit vào Treasury Wallet của Base Asset.
 - Seller fee credit vào Treasury Wallet của Quote Asset.
 
+Nếu Buy Order là Maker:
+
+```text
+buyerFeeRate = makerFeeRate
+sellerFeeRate = takerFeeRate
+```
+
+Nếu Sell Order là Maker:
+
+```text
+sellerFeeRate = makerFeeRate
+buyerFeeRate = takerFeeRate
+```
+
+Công thức:
+
+```text
+quoteAmount = executionPrice * executedQuantity
+buyerFeeAmount = executedQuantity * buyerFeeRate
+sellerFeeAmount = quoteAmount * sellerFeeRate
+```
+
+Mọi kết quả tài chính nội bộ được `ROUND_DOWN` tới tối đa 18 chữ số thập phân.
+
 Settlement phải tạo Ledger Entry cho cả User và Treasury.
 
 Không được chỉ giảm số lượng User nhận mà không ghi nhận Treasury Wallet.
@@ -397,7 +468,7 @@ Khi Backend nhận `OrderCancelled`:
 3. Lock Order.
 4. Lock Wallet.
 5. Unlock `remainingLockedAmount`.
-6. Tạo Ledger `ORDER_UNLOCK`.
+6. Tạo 2 Ledger Entry `ORDER_UNLOCK`: `LOCKED -amount`, `AVAILABLE +amount`.
 7. Chuyển Order sang `CANCELLED`.
 8. Tạo Outbox `OrderUpdated`, `BalanceUpdated`.
 9. Insert `processed_events`.
@@ -406,16 +477,18 @@ Khi Backend nhận `OrderCancelled`:
 Khi nhận `CancelOrderRejected`:
 
 - Không tự unlock balance.
-- `MARKET_SUSPENDED`: giữ Order ở `CANCEL_PENDING`.
-- `ORDER_ALREADY_FILLED`: chờ Trade settlement chuyển Order sang `FILLED`.
-- `ORDER_ALREADY_CANCELLED`: idempotent nếu PostgreSQL đã `CANCELLED`; nếu chưa, yêu cầu reconciliation.
-- `ORDER_NOT_FOUND`: suspend Trading Pair và reconciliation.
+- `ORDER_NOT_FOUND` + DB Order `FILLED`: ACK idempotent.
+- `ORDER_NOT_FOUND` + DB Order `CANCELLED`: ACK idempotent.
+- `ORDER_NOT_FOUND` + DB Order `CANCEL_PENDING`: suspend Market và reconciliation.
+- `MARKET_NOT_READY`: giữ `CANCEL_PENDING`, suspend Market và operator xử lý thủ công.
 
 ---
 
-## 18. Deposit
+## 18. Optional Business Rules — Deposit
 
-Deposit token test được credit khi:
+Deposit token test chỉ triển khai sau khi Core Trading Flow chạy ổn.
+
+Nếu triển khai Deposit, Deposit token test được credit khi:
 
 - Event từ `ExchangeVault` hợp lệ.
 - Đủ confirmation.
@@ -423,13 +496,17 @@ Deposit token test được credit khi:
 
 Trong transaction credit:
 
-1. Kiểm tra `UNIQUE(chainId, txHash, logIndex)` trên bảng `deposits`.
-2. Lock Wallet.
-3. Tăng available balance.
-4. Tạo Ledger `DEPOSIT`.
-5. Chuyển Deposit sang credited.
-6. Tạo Outbox `DepositUpdated`, `BalanceUpdated`.
-7. Commit.
+1. Kiểm tra `processed_events`.
+2. Lock Deposit bằng `SELECT ... FOR UPDATE`.
+3. Kiểm tra Deposit chưa `CREDITED`.
+4. Kiểm tra `chainId + txHash + logIndex` không trùng.
+5. Lock Wallet.
+6. Tăng available balance.
+7. Tạo Ledger `DEPOSIT`.
+8. Chuyển Deposit sang `CREDITED`.
+9. Tạo Outbox `DepositUpdated`, `BalanceUpdated`.
+10. Insert `processed_events`.
+11. Commit.
 
 ---
 
@@ -464,6 +541,11 @@ orderbook.update
 trade.created
 order.updated
 balance.updated
+```
+
+Nếu triển khai Deposit, realtime private event có thêm:
+
+```text
 deposit.updated
 ```
 
@@ -483,10 +565,37 @@ Order create:
 UNIQUE(userId, idempotencyKey)
 ```
 
+Backend phải lưu `idempotencyPayloadHash` trên Order.
+
+Hash dùng SHA-256 từ payload đã canonicalize:
+
+```text
+symbol|side|type|price|quantity
+```
+
+Ví dụ:
+
+```text
+SHA-256("HAU_USDT|BUY|LIMIT|1.000000000000000000|100.000000000000000000")
+```
+
+Cùng User + cùng Idempotency Key:
+
+- Payload hash giống: trả lại Order cũ.
+- Payload hash khác: trả `IDEMPOTENCY_CONFLICT`.
+
 Consumer:
 
 ```text
 UNIQUE(consumerName, messageId)
+```
+
+Consumer phải lưu `payloadHash` trong `processed_events`.
+
+```text
+messageId chưa tồn tại -> xử lý -> lưu payloadHash
+messageId tồn tại + hash giống -> ACK idempotent
+messageId tồn tại + hash khác -> dead-letter
 ```
 
 Trade settlement:
@@ -513,7 +622,31 @@ Các nghiệp vụ sau phải atomic:
 - Reject Order và unlock balance.
 - Cancel Order settlement.
 - Trade Settlement.
-- Deposit credit.
+- Deposit credit nếu triển khai Optional Deposit.
+
+Core MVP dùng PostgreSQL `READ COMMITTED` + `SELECT ... FOR UPDATE`.
+Không cần Serializable cho toàn hệ thống.
+
+Mọi transaction lock nhiều row phải dùng thứ tự ổn định:
+
+1. Lock Order theo `id` tăng dần.
+2. Lock Wallet theo `id` tăng dần.
+3. Treasury Wallet cũng nằm trong danh sách Wallet được sort.
+4. Không lock thêm row theo thứ tự phát sinh trong code.
+
+Ví dụ:
+
+```ts
+const orderIds = [buyOrderId, sellOrderId].sort();
+const walletIds = [
+  buyerBaseWalletId,
+  buyerQuoteWalletId,
+  sellerBaseWalletId,
+  sellerQuoteWalletId,
+  treasuryBaseWalletId,
+  treasuryQuoteWalletId,
+].sort();
+```
 
 Không được tạo trạng thái một phần:
 

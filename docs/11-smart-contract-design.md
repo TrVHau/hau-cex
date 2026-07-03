@@ -138,15 +138,15 @@ Không tạo một Vault riêng cho mỗi User.
 
 ## 5. Ownership
 
-| Dữ liệu | Owner |
-| ------- | ----- |
+| Dữ liệu                        | Owner      |
+| ------------------------------ | ---------- |
 | Token trong ví blockchain User | Blockchain |
-| Token trong ExchangeVault | Blockchain |
-| Deposit Intent | Backend |
-| Wallet nội bộ | Backend |
-| Ledger | Backend |
-| Confirmation state | Backend |
-| Deposit credit | Backend |
+| Token trong ExchangeVault      | Blockchain |
+| Deposit Intent                 | Backend    |
+| Wallet nội bộ                  | Backend    |
+| Ledger                         | Backend    |
+| Confirmation state             | Backend    |
+| Deposit credit                 | Backend    |
 
 Quy tắc:
 
@@ -551,14 +551,14 @@ EXPIRED
 FAILED
 ```
 
-| Status | Ý nghĩa |
-| ------ | ------- |
-| `PENDING` | Intent đã tạo, chưa phát hiện event hợp lệ. |
-| `DETECTED` | Đã phát hiện event hợp lệ. |
-| `CONFIRMING` | Đang chờ đủ confirmation. |
-| `CREDITED` | Wallet nội bộ đã được cộng tiền. |
-| `EXPIRED` | Intent hết hạn mà chưa có event hợp lệ. |
-| `FAILED` | Event hợp lệ nhưng không thể hoàn thành nghiệp vụ. |
+| Status       | Ý nghĩa                                            |
+| ------------ | -------------------------------------------------- |
+| `PENDING`    | Intent đã tạo, chưa phát hiện event hợp lệ.        |
+| `DETECTED`   | Đã phát hiện event hợp lệ.                         |
+| `CONFIRMING` | Đang chờ đủ confirmation.                          |
+| `CREDITED`   | Wallet nội bộ đã được cộng tiền.                   |
+| `EXPIRED`    | Intent hết hạn mà chưa có event hợp lệ.            |
+| `FAILED`     | Event hợp lệ nhưng không thể hoàn thành nghiệp vụ. |
 
 Allowed transition:
 
@@ -758,29 +758,29 @@ Bảng:
 deposits
 ```
 
-| Column | Type | Note |
-| ------ | ---- | ---- |
-| id | UUID | PK |
-| user_id | UUID | FK users.id |
-| asset_id | UUID | FK assets.id |
-| account_reference | TEXT | UNIQUE, NOT NULL |
-| depositor_address | TEXT | NOT NULL |
-| token_address | TEXT | NOT NULL |
-| chain_id | BIGINT | NOT NULL |
-| tx_hash | TEXT | NULL |
-| log_index | INTEGER | NULL |
-| block_number | BIGINT | NULL |
-| block_hash | TEXT | NULL |
-| amount_raw | NUMERIC(78,0) | NULL |
-| amount | NUMERIC(38,18) | NULL |
-| status | deposit_status | NOT NULL |
-| confirmation_count | INTEGER | NOT NULL DEFAULT 0 |
-| expires_at | TIMESTAMPTZ | NOT NULL |
-| detected_at | TIMESTAMPTZ | NULL |
-| credited_at | TIMESTAMPTZ | NULL |
-| failure_reason | TEXT | NULL |
-| created_at | TIMESTAMPTZ | NOT NULL |
-| updated_at | TIMESTAMPTZ | NOT NULL |
+| Column             | Type           | Note               |
+| ------------------ | -------------- | ------------------ |
+| id                 | UUID           | PK                 |
+| user_id            | UUID           | FK users.id        |
+| asset_id           | UUID           | FK assets.id       |
+| account_reference  | TEXT           | UNIQUE, NOT NULL   |
+| depositor_address  | TEXT           | NOT NULL           |
+| token_address      | TEXT           | NOT NULL           |
+| chain_id           | BIGINT         | NOT NULL           |
+| tx_hash            | TEXT           | NULL               |
+| log_index          | INTEGER        | NULL               |
+| block_number       | BIGINT         | NULL               |
+| block_hash         | TEXT           | NULL               |
+| amount_raw         | NUMERIC(78,0)  | NULL               |
+| amount             | NUMERIC(38,18) | NULL               |
+| status             | deposit_status | NOT NULL           |
+| confirmation_count | INTEGER        | NOT NULL DEFAULT 0 |
+| expires_at         | TIMESTAMPTZ    | NOT NULL           |
+| detected_at        | TIMESTAMPTZ    | NULL               |
+| credited_at        | TIMESTAMPTZ    | NULL               |
+| failure_reason     | TEXT           | NULL               |
+| created_at         | TIMESTAMPTZ    | NOT NULL           |
+| updated_at         | TIMESTAMPTZ    | NOT NULL           |
 
 Enum:
 

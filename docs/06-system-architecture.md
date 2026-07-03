@@ -52,6 +52,7 @@ WebSocket Gateway
 - Publish Outbox message lên Redis Streams.
 - Consume Engine Event.
 - Trade Settlement.
+- Lưu latest Order Book snapshot vào Redis khi nhận `OrderBookChanged`.
 - Publish domain event sau commit.
 
 ### Go Matching Engine
@@ -149,6 +150,27 @@ User
 → Order CANCELLED
 ```
 
+### 3.5. Order Book Snapshot và Realtime
+
+```text
+Matching Engine
+→ OrderBookChanged
+→ Backend Worker
+→ lưu latest snapshot vào Redis
+→ phát orderbook.update
+```
+
+Redis key:
+
+```text
+cache:orderbook:{tradingPairId}
+```
+
+REST API `GET /markets/:symbol/order-book` đọc latest snapshot từ Redis.
+`bestBid` và `bestAsk` cũng lấy từ snapshot này.
+
+Recent Trades và Last Price vẫn lấy từ PostgreSQL Trade đã settlement.
+
 ## 4. Redis Streams
 
 Streams:
@@ -195,15 +217,15 @@ BalanceUpdated
 
 ## 5. Ownership
 
-| Dữ liệu | Owner |
-| ------- | ----- |
-| Wallet | Backend |
-| Ledger | Backend |
-| Order bền vững | Backend |
-| Order Book runtime | Matching Engine |
-| Trade settlement | Backend |
-| Command Sequence | Backend |
-| Trade Sequence | Matching Engine |
+| Dữ liệu             | Owner           |
+| ------------------- | --------------- |
+| Wallet              | Backend         |
+| Ledger              | Backend         |
+| Order bền vững      | Backend         |
+| Order Book runtime  | Matching Engine |
+| Trade settlement    | Backend         |
+| Command Sequence    | Backend         |
+| Trade Sequence      | Matching Engine |
 | Order Book Sequence | Matching Engine |
 
 Matching Engine không được ghi PostgreSQL.
@@ -258,11 +280,11 @@ Không giữ recovery là chức năng bắt buộc khi chưa có API/message đ
 
 ---
 
-## 9. Blockchain Listener và Deposit
+## 9. Optional — Blockchain Listener và Deposit
 
-Blockchain Listener xử lý Deposit token test.
+Blockchain Listener chỉ chạy khi triển khai Optional Deposit token test.
 
-Khi triển khai Deposit:
+Nếu triển khai Deposit:
 
 ```text
 User gửi token test vào ExchangeVault
@@ -280,17 +302,17 @@ User gửi token test vào ExchangeVault
 
 ## 10. Công Nghệ
 
-| Thành phần | Công nghệ |
-| ---------- | --------- |
-| Frontend | React, TypeScript, Vite |
-| Backend | NestJS, TypeScript |
-| Matching Engine | Go |
-| Database | PostgreSQL |
-| ORM | Prisma |
-| Messaging | Redis Streams |
-| Realtime | Socket.IO |
+| Thành phần               | Công nghệ               |
+| ------------------------ | ----------------------- |
+| Frontend                 | React, TypeScript, Vite |
+| Backend                  | NestJS, TypeScript      |
+| Matching Engine          | Go                      |
+| Database                 | PostgreSQL              |
+| ORM                      | Prisma                  |
+| Messaging                | Redis Streams           |
+| Realtime                 | Socket.IO               |
 | Blockchain test optional | Solidity, Hardhat, viem |
-| Local infra | Docker Compose |
+| Local infra              | Docker Compose          |
 
 ---
 

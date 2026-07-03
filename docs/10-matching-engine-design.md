@@ -222,18 +222,25 @@ FAILED
 - `RECOVERING`: đang rebuild book.
 - `READY`: nhận `PlaceOrder` và `CancelOrder`.
 - `SUSPENDED`: từ chối `PlaceOrder`, vẫn nhận `CancelOrder`.
-- `FAILED`: lỗi nghiêm trọng, cần vận hành/reconciliation.
+- `FAILED`: trạng thái kỹ thuật trong memory của Go Engine khi lỗi nghiêm trọng.
 
 MVP chỉ chạy một Matching Engine instance trong Docker Compose.
 
+PostgreSQL Trading Pair không có trạng thái `FAILED`.
+Khi Engine Pair lỗi nghiêm trọng:
+
+- Engine state = `FAILED`.
+- Database Trading Pair status = `SUSPENDED`.
+- Core MVP yêu cầu operator reset hoặc reconciliation thủ công.
+
 Hành vi theo trạng thái:
 
-| State | PlaceOrder | CancelOrder |
-| ----- | ---------- | ----------- |
-| `READY` | Cho phép | Cho phép |
-| `SUSPENDED` | Từ chối | Cho phép |
-| `RECOVERING` | Từ chối | Từ chối |
-| `FAILED` | Từ chối | Từ chối |
+| State        | PlaceOrder | CancelOrder |
+| ------------ | ---------- | ----------- |
+| `READY`      | Cho phép   | Cho phép    |
+| `SUSPENDED`  | Từ chối    | Cho phép    |
+| `RECOVERING` | Từ chối    | Từ chối     |
+| `FAILED`     | Từ chối    | Từ chối     |
 
 ---
 
@@ -586,7 +593,18 @@ Khi Pair `FAILED`:
 
 - Không xử lý command mới.
 - Không tự sửa Order Book.
-- Chờ Backend/operator reconciliation.
+- Backend chuyển Trading Pair trong PostgreSQL sang `SUSPENDED`.
+- Chờ operator reset hoặc reconciliation thủ công.
+
+Khi `EVENT_PUBLISH_FAILED`:
+
+- Matching Engine chuyển Pair Engine sang `FAILED`.
+- Backend chuyển Trading Pair trong PostgreSQL sang `SUSPENDED`.
+- Không ACK command hiện tại.
+- Không xử lý command mới.
+- Operator kiểm tra Redis và Engine log.
+- Core MVP có thể reset môi trường demo.
+- Automatic recovery là Future Work.
 
 ---
 

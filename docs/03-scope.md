@@ -21,6 +21,7 @@ Core MVP tập trung vào luồng trading cốt lõi:
 - Register, Login, Refresh, Logout, `GET /me`.
 - Admin lock/unlock User.
 - Asset và Trading Pair được seed sẵn.
+- User A, User B và Wallet demo được seed sẵn.
 - Wallet Available/Locked.
 - Ledger append-only.
 - Limit Buy/Sell.
@@ -73,11 +74,11 @@ MVP không làm:
 
 ## 5. Actor
 
-| Actor | Quyền chính |
-| ----- | ----------- |
+| Actor | Quyền chính                                                                        |
+| ----- | ---------------------------------------------------------------------------------- |
 | Guest | Xem market, order book, recent trades và chart nội bộ nếu có Optional Candlestick. |
-| User | Quản lý tài khoản, wallet, order và trade của chính mình. |
-| Admin | Khóa/mở khóa User và vận hành Market cơ bản. |
+| User  | Quản lý tài khoản, wallet, order và trade của chính mình.                          |
+| Admin | Khóa/mở khóa User và vận hành Market cơ bản.                                       |
 
 ---
 
@@ -115,6 +116,9 @@ Hệ thống phải hỗ trợ:
 - Không dùng float cho dữ liệu tài chính.
 
 Ledger là dữ liệu bất biến, không update/delete qua nghiệp vụ thường.
+
+Số dư demo ban đầu phải được tạo bằng Ledger Entry `INITIAL_BALANCE`.
+Seed script không được thay đổi Wallet nếu không ghi Ledger.
 
 ---
 
