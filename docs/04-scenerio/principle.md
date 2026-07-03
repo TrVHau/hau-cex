@@ -1,0 +1,15 @@
+- Mọi thao tác tài chính phải sử dụng database transaction.
+- Không được cập nhật Wallet mà không tạo Ledger Entry tương ứng.
+- Command và Event phải có ID duy nhất.
+- Consumer phải hỗ trợ idempotency.
+- Private event chỉ được gửi đến đúng User.
+- Matching Engine không trực tiếp xác thực người dùng.
+- Matching Engine không trực tiếp xử lý blockchain.
+- PostgreSQL là nguồn dữ liệu bền vững.
+- Redis không phải nguồn số dư chính.
+- Không sử dụng số thực float cho giá và khối lượng.
+- Order chỉ được xử lý theo Sequence xác định.
+- Mọi hành động Admin quan trọng phải được ghi Audit Log.
+- Dữ liệu realtime chỉ được phát sau khi dữ liệu quan trọng đã commit.
+- Deposit và Withdrawal phải có cơ chế chống xử lý trùng.
+- Khi một bước trong transaction thất bại, toàn bộ thay đổi liên quan phải rollback.
