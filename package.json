@@ -1,0 +1,16 @@
+{
+  "name": "hau-cex",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev:web": "pnpm --filter hau-cex/web dev",
+    "build:web": "pnpm --filter hau-cex/web build",
+    "lint:web": "pnpm --filter hau-cex/web lint",
+    "dev:backend": "pnpm --filter hau-cex/backend start:dev",
+    "build:backend": "pnpm --filter hau-cex/backend build",
+    "lint:backend": "pnpm --filter hau-cex/backend lint",
+    "format:backend": "pnpm --filter hau-cex/backend format",
+    "test:backend": "pnpm --filter hau-cex/backend test",
+    "test:e2e:backend": "pnpm --filter hau-cex/backend test:e2e"
+  }
+}
