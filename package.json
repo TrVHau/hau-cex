@@ -3,14 +3,19 @@
   "private": true,
   "version": "0.0.1",
   "scripts": {
-    "dev:web": "pnpm --filter hau-cex/web dev",
-    "build:web": "pnpm --filter hau-cex/web build",
-    "lint:web": "pnpm --filter hau-cex/web lint",
-    "dev:backend": "pnpm --filter hau-cex/backend start:dev",
-    "build:backend": "pnpm --filter hau-cex/backend build",
-    "lint:backend": "pnpm --filter hau-cex/backend lint",
-    "format:backend": "pnpm --filter hau-cex/backend format",
-    "test:backend": "pnpm --filter hau-cex/backend test",
-    "test:e2e:backend": "pnpm --filter hau-cex/backend test:e2e"
+    "dev:web": "pnpm -C apps/web hau-cex/web dev",
+    "build:web": "pnpm -C apps/web hau-cex/web build",
+    "lint:web": "pnpm -C apps/web hau-cex/web lint",
+    "dev:api": "pnpm -C apps/backend hau-cex/backend start:api:dev",
+    "dev:worker": "pnpm -C apps/backend hau-cex/backend start:worker:dev",
+    "build:backend": "pnpm -C apps/backend hau-cex/backend build",
+    "build:api": "pnpm -C apps/backend hau-cex/backend build:api",
+    "build:worker": "pnpm -C apps/backend hau-cex/backend build:worker",
+    "start:api": "pnpm -C apps/backend hau-cex/backend start:api:prod",
+    "start:worker": "pnpm -C apps/backend hau-cex/backend start:worker:prod",
+    "lint:backend": "pnpm -C apps/backend hau-cex/backend lint",
+    "format:backend": "pnpm -C apps/backend hau-cex/backend format",
+    "test:backend": "pnpm -C apps/backend hau-cex/backend test",
+    "test:e2e:backend": "pnpm -C apps/backend hau-cex/backend test:e2e"
   }
 }
