@@ -5,6 +5,6 @@
     "outDir": "./dist/api",
     "tsBuildInfoFile": "./dist/api/tsconfig.tsbuildinfo"
   },
-  "include": ["src/../*.ts"],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
 }

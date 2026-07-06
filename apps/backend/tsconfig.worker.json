@@ -5,6 +5,6 @@
     "outDir": "./dist/worker",
     "tsBuildInfoFile": "./dist/worker/tsconfig.tsbuildinfo"
   },
-  "include": ["src/../*.ts"],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
 }
