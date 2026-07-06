@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "node20",
+    "types": ["node"],
+    "verbatimModuleSyntax": true,
+    "noEmit": true
+  },
+  "include": [
+    "hardhat.config.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts",
+    "ignition/**/*.ts"
+  ],
+  "exclude": ["node_modules", "artifacts", "cache"]
+}

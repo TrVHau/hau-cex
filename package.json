@@ -21,6 +21,10 @@
     "test:engine": "cd services/matching-engine && go test ./...",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
-    "infra:logs": "docker compose logs -f"
+    "infra:logs": "docker compose logs -f",
+    "contracts:compile": "pnpm --filter @hau-cex/contracts compile",
+    "contracts:test": "pnpm --filter @hau-cex/contracts test",
+    "contracts:node": "pnpm --filter @hau-cex/contracts node",
+    "contracts:clean": "pnpm --filter @hau-cex/contracts clean"
   }
 }
