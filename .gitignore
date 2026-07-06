@@ -8,3 +8,5 @@ coverage/
 contracts/artifacts/
 contracts/cache/
 contracts/typechain-types/
+
+apps/backend/src/generated/prisma/
