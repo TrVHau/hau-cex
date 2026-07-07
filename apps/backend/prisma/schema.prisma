@@ -6,3 +6,343 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// Enums
+
+enum UserRole {
+  USER
+  ADMIN
+  SYSTEM
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  ACTIVE
+  LOCKED
+
+  @@map("user_status")
+}
+
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("asset_status")
+}
+
+enum TradingPairStatus {
+  RECOVERING
+  READY
+  SUSPENDED
+
+  @@map("trading_pair_status")
+}
+
+enum OrderSide {
+  BUY
+  SELL
+
+  @@map("order_side")
+}
+
+enum OrderStatus {
+  PENDING
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCEL_PENDING
+  CANCELLED
+  REJECTED
+
+  @@map("order_status")
+}
+
+enum LedgerBalanceType {
+  AVAILABLE
+  LOCKED
+
+  @@map("ledger_balance_type")
+}
+
+enum LedgerEntryType {
+  INITIAL_BALANCE
+  DEPOSIT
+  ORDER_LOCK
+  ORDER_UNLOCK
+  TRADE_SETTLEMENT
+  TRADING_FEE
+
+  @@map("ledger_entry_type")
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+
+  @@map("outbox_status")
+}
+
+// Models
+
+model User {
+  id           String     @id(map: "pk_users") @default(uuid(7)) @db.Uuid
+  email        String     @unique(map: "uq_users_email") @db.Citext
+  passwordHash String     @map("password_hash")
+  fullName     String?    @map("full_name") @db.VarChar(150)
+  role         UserRole   @default(USER)
+  status       UserStatus @default(ACTIVE)
+  lockedAt     DateTime?  @map("locked_at") @db.Timestamptz(6)
+  lockedReason String?    @map("locked_reason")
+  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sessions      Session[]
+  wallets       Wallet[]
+  ledgerEntries LedgerEntry[]
+  orders        Order[]
+  buyerTrades   Trade[]       @relation("BuyerUser")
+  sellerTrades  Trade[]       @relation("SellerUser")
+
+  @@map("users")
+}
+
+model Session {
+  id               String    @id(map: "pk_sessions") @default(uuid(7)) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, map: "fk_sessions_user")
+
+  @@index([userId], map: "idx_sessions_user_id")
+  @@map("sessions")
+}
+
+model Asset {
+  id              String      @id(map: "pk_assets") @default(uuid(7)) @db.Uuid
+  symbol          String      @unique(map: "uq_assets_symbol") @db.VarChar(20)
+  name            String      @db.VarChar(100)
+  decimals        Int
+  contractAddress String?     @map("contract_address")
+  status          AssetStatus
+  depositEnabled  Boolean     @map("deposit_enabled")
+  tradingEnabled  Boolean     @map("trading_enabled")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  baseTradingPairs  TradingPair[] @relation("BaseAsset")
+  quoteTradingPairs TradingPair[] @relation("QuoteAsset")
+  wallets           Wallet[]
+  ledgerEntries     LedgerEntry[]
+  lockedOrders      Order[]       @relation("LockedAsset")
+
+  @@map("assets")
+}
+
+model TradingPair {
+  id                String            @id(map: "pk_trading_pairs") @default(uuid(7)) @db.Uuid
+  symbol            String            @unique(map: "uq_trading_pairs_symbol") @db.VarChar(30)
+  baseAssetId       String            @map("base_asset_id") @db.Uuid
+  quoteAssetId      String            @map("quote_asset_id") @db.Uuid
+  pricePrecision    Int               @map("price_precision")
+  quantityPrecision Int               @map("quantity_precision")
+  tickSize          Decimal           @map("tick_size") @db.Decimal(38, 18)
+  stepSize          Decimal           @map("step_size") @db.Decimal(38, 18)
+  minQuantity       Decimal           @map("min_quantity") @db.Decimal(38, 18)
+  minNotional       Decimal           @map("min_notional") @db.Decimal(38, 18)
+  makerFeeRate      Decimal           @map("maker_fee_rate") @db.Decimal(38, 18)
+  takerFeeRate      Decimal           @map("taker_fee_rate") @db.Decimal(38, 18)
+  status            TradingPairStatus
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  baseAsset             Asset                  @relation("BaseAsset", fields: [baseAssetId], references: [id], onDelete: Restrict, map: "fk_trading_pairs_base_asset")
+  quoteAsset            Asset                  @relation("QuoteAsset", fields: [quoteAssetId], references: [id], onDelete: Restrict, map: "fk_trading_pairs_quote_asset")
+  orderSequence         OrderSequence?
+  engineCommandSequence EngineCommandSequence?
+  orders                Order[]
+  trades                Trade[]
+
+  @@unique([baseAssetId, quoteAssetId], map: "uq_trading_pairs_base_quote")
+  @@map("trading_pairs")
+}
+
+model Wallet {
+  id               String   @id(map: "pk_wallets") @default(uuid(7)) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  assetId          String   @map("asset_id") @db.Uuid
+  availableBalance Decimal  @default(0) @map("available_balance") @db.Decimal(38, 18)
+  lockedBalance    Decimal  @default(0) @map("locked_balance") @db.Decimal(38, 18)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Restrict, map: "fk_wallets_user")
+  asset         Asset         @relation(fields: [assetId], references: [id], onDelete: Restrict, map: "fk_wallets_asset")
+  ledgerEntries LedgerEntry[]
+
+  @@unique([userId, assetId], map: "uq_wallets_user_asset")
+  @@index([assetId], map: "idx_wallets_asset_id")
+  @@map("wallets")
+}
+
+model LedgerEntry {
+  id            String            @id(map: "pk_ledger_entries") @default(uuid(7)) @db.Uuid
+  walletId      String            @map("wallet_id") @db.Uuid
+  userId        String            @map("user_id") @db.Uuid
+  assetId       String            @map("asset_id") @db.Uuid
+  entryType     LedgerEntryType   @map("entry_type")
+  balanceType   LedgerBalanceType @map("balance_type")
+  amount        Decimal           @db.Decimal(38, 18)
+  referenceType String            @map("reference_type") @db.VarChar(50)
+  referenceId   String            @map("reference_id") @db.Uuid
+  operationId   String            @map("operation_id") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict, map: "fk_ledger_entries_wallet")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict, map: "fk_ledger_entries_user")
+  asset  Asset  @relation(fields: [assetId], references: [id], onDelete: Restrict, map: "fk_ledger_entries_asset")
+
+  @@index([walletId, createdAt(sort: Desc)], map: "idx_ledger_wallet_created")
+  @@index([referenceType, referenceId], map: "idx_ledger_reference")
+  @@index([operationId], map: "idx_ledger_operation")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_ledger_user_created")
+  @@map("ledger_entries")
+}
+
+model OrderSequence {
+  tradingPairId String   @id(map: "pk_order_sequences") @map("trading_pair_id") @db.Uuid
+  lastValue     BigInt   @default(0) @map("last_value") @db.BigInt
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Cascade, map: "fk_order_sequences_trading_pair")
+
+  @@map("order_sequences")
+}
+
+model EngineCommandSequence {
+  tradingPairId String   @id(map: "pk_engine_command_sequences") @map("trading_pair_id") @db.Uuid
+  lastValue     BigInt   @default(0) @map("last_value") @db.BigInt
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Cascade, map: "fk_engine_command_sequences_trading_pair")
+
+  @@map("engine_command_sequences")
+}
+
+model Order {
+  id                     String      @id(map: "pk_orders") @default(uuid(7)) @db.Uuid
+  userId                 String      @map("user_id") @db.Uuid
+  tradingPairId          String      @map("trading_pair_id") @db.Uuid
+  side                   OrderSide
+  status                 OrderStatus @default(PENDING)
+  price                  Decimal     @db.Decimal(38, 18)
+  quantity               Decimal     @db.Decimal(38, 18)
+  filledQuantity         Decimal     @default(0) @map("filled_quantity") @db.Decimal(38, 18)
+  remainingQuantity      Decimal     @map("remaining_quantity") @db.Decimal(38, 18)
+  lockedAssetId          String      @map("locked_asset_id") @db.Uuid
+  lockedAmount           Decimal     @map("locked_amount") @db.Decimal(38, 18)
+  remainingLockedAmount  Decimal     @map("remaining_locked_amount") @db.Decimal(38, 18)
+  orderSequence          BigInt      @map("order_sequence") @db.BigInt
+  idempotencyKey         String      @map("idempotency_key")
+  idempotencyPayloadHash String      @map("idempotency_payload_hash")
+  createdAt              DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict, map: "fk_orders_user")
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Restrict, map: "fk_orders_trading_pair")
+  lockedAsset Asset       @relation("LockedAsset", fields: [lockedAssetId], references: [id], onDelete: Restrict, map: "fk_orders_locked_asset")
+  buyTrades   Trade[]     @relation("BuyOrder")
+  sellTrades  Trade[]     @relation("SellOrder")
+  makerTrades Trade[]     @relation("MakerOrder")
+  takerTrades Trade[]     @relation("TakerOrder")
+
+  @@unique([userId, idempotencyKey], map: "uq_orders_user_idempotency")
+  @@unique([tradingPairId, orderSequence], map: "uq_orders_pair_sequence")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_orders_user_created")
+  @@index([tradingPairId, status], map: "idx_orders_pair_status")
+  @@index([lockedAssetId], map: "idx_orders_locked_asset_id")
+  @@map("orders")
+}
+
+model Trade {
+  id               String    @id(map: "pk_trades") @default(uuid(7)) @db.Uuid
+  engineMatchId    String    @unique(map: "uq_trades_engine_match_id") @map("engine_match_id")
+  engineMessageId  String    @unique(map: "uq_trades_engine_message_id") @map("engine_message_id") @db.Uuid
+  tradingPairId    String    @map("trading_pair_id") @db.Uuid
+  buyOrderId       String    @map("buy_order_id") @db.Uuid
+  sellOrderId      String    @map("sell_order_id") @db.Uuid
+  buyerUserId      String    @map("buyer_user_id") @db.Uuid
+  sellerUserId     String    @map("seller_user_id") @db.Uuid
+  makerOrderId     String    @map("maker_order_id") @db.Uuid
+  takerOrderId     String    @map("taker_order_id") @db.Uuid
+  takerSide        OrderSide @map("taker_side")
+  executionPrice   Decimal   @map("execution_price") @db.Decimal(38, 18)
+  executedQuantity Decimal   @map("executed_quantity") @db.Decimal(38, 18)
+  quoteAmount      Decimal   @map("quote_amount") @db.Decimal(38, 18)
+  makerFeeRate     Decimal   @map("maker_fee_rate") @db.Decimal(38, 18)
+  takerFeeRate     Decimal   @map("taker_fee_rate") @db.Decimal(38, 18)
+  buyerFeeAmount   Decimal   @map("buyer_fee_amount") @db.Decimal(38, 18)
+  sellerFeeAmount  Decimal   @map("seller_fee_amount") @db.Decimal(38, 18)
+  sequence         BigInt    @db.BigInt
+  matchedAt        DateTime  @map("matched_at") @db.Timestamptz(6)
+  settledAt        DateTime  @map("settled_at") @db.Timestamptz(6)
+
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Restrict, map: "fk_trades_trading_pair")
+  buyOrder    Order       @relation("BuyOrder", fields: [buyOrderId], references: [id], onDelete: Restrict, map: "fk_trades_buy_order")
+  sellOrder   Order       @relation("SellOrder", fields: [sellOrderId], references: [id], onDelete: Restrict, map: "fk_trades_sell_order")
+  buyer       User        @relation("BuyerUser", fields: [buyerUserId], references: [id], onDelete: Restrict, map: "fk_trades_buyer_user")
+  seller      User        @relation("SellerUser", fields: [sellerUserId], references: [id], onDelete: Restrict, map: "fk_trades_seller_user")
+  makerOrder  Order       @relation("MakerOrder", fields: [makerOrderId], references: [id], onDelete: Restrict, map: "fk_trades_maker_order")
+  takerOrder  Order       @relation("TakerOrder", fields: [takerOrderId], references: [id], onDelete: Restrict, map: "fk_trades_taker_order")
+
+  @@unique([tradingPairId, sequence], map: "uq_trades_pair_sequence")
+  @@index([buyOrderId], map: "idx_trades_buy_order_id")
+  @@index([sellOrderId], map: "idx_trades_sell_order_id")
+  @@index([buyerUserId, settledAt(sort: Desc)], map: "idx_trades_buyer_settled")
+  @@index([sellerUserId, settledAt(sort: Desc)], map: "idx_trades_seller_settled")
+  @@map("trades")
+}
+
+
+model OutboxEvent {
+  id              String       @id(map: "pk_outbox_events") @default(uuid(7)) @db.Uuid
+  messageId       String       @unique(map: "uq_outbox_events_message_id") @map("message_id") @db.Uuid
+  version         Int
+  correlationId   String       @map("correlation_id") @db.Uuid
+  streamName      String       @map("stream_name")
+  messageType     String       @map("message_type")
+  payload         Json         @db.JsonB
+  status          OutboxStatus @default(PENDING)
+  partitionKey    String?      @map("partition_key")
+  commandSequence BigInt?      @map("command_sequence") @db.BigInt
+  occurredAt      DateTime     @map("occurred_at") @db.Timestamptz(6)
+  retryCount      Int          @default(0) @map("retry_count")
+  lastError       String?      @map("last_error")
+  nextRetryAt     DateTime?    @map("next_retry_at") @db.Timestamptz(6)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  publishedAt     DateTime?    @map("published_at") @db.Timestamptz(6)
+
+  @@index([status, nextRetryAt, createdAt], map: "idx_outbox_status_retry_created")
+  @@index([streamName, partitionKey], map: "idx_outbox_stream_partition")
+  @@map("outbox_events")
+}
+
+model ProcessedEvent {
+  id                String   @id(map: "pk_processed_events") @default(uuid(7)) @db.Uuid
+  consumerName      String   @map("consumer_name")
+  messageId         String   @map("message_id") @db.Uuid
+  messageType       String   @map("message_type")
+  payloadHash       String   @map("payload_hash")
+  result            String
+  resultReferenceId String?  @map("result_reference_id") @db.Uuid
+  processedAt       DateTime @default(now()) @map("processed_at") @db.Timestamptz(6)
+
+  @@unique([consumerName, messageId], map: "uq_processed_events_consumer_message")
+  @@index([messageId], map: "idx_processed_events_message_id")
+  @@map("processed_events")
+}
