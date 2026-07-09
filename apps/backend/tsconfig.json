@@ -13,5 +13,6 @@
 
     "outDir": "./dist",
     "incremental": true
-  }
+  },
+  "include": ["src/**/*", "prisma/**/*"]
 }
