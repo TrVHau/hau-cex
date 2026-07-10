@@ -25,6 +25,14 @@
     "contracts:compile": "pnpm --filter @hau-cex/contracts compile",
     "contracts:test": "pnpm --filter @hau-cex/contracts test",
     "contracts:node": "pnpm --filter @hau-cex/contracts node",
-    "contracts:clean": "pnpm --filter @hau-cex/contracts clean"
-  }
+    "contracts:clean": "pnpm --filter @hau-cex/contracts clean",
+    "db:validate": "pnpm --filter @hau-cex/backend db:validate",
+    "db:generate": "pnpm --filter @hau-cex/backend db:generate",
+    "db:seed": "pnpm --filter @hau-cex/backend db:seed",
+    "db:format": "pnpm --filter @hau-cex/backend db:format",
+    "db:migrate": "pnpm --filter @hau-cex/backend db:migrate",
+    "db:studio": "pnpm --filter @hau-cex/backend db:studio",
+    "db:reset": "pnpm --filter @hau-cex/backend db:reset"
+  },
+  "packageManager": "pnpm@11.11.0+sha512.4463f65fd80ed80d69bc1d4bf163ee94f605c7380fc318bb5b2ebe15f8cd12d49c51a4d59e951b401e764d3b6ca751cbf51bc50ed7001a6bcb4935e684c34882"
 }
