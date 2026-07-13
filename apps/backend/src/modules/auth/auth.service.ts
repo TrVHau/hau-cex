@@ -15,6 +15,7 @@ import { JwtAccessPayload } from './types/jwt-payload.type';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import ms, { type StringValue } from 'ms';
 
 type UserInfo = {
   id: string;
@@ -49,7 +50,10 @@ export class AuthService {
       throw new ConflictException('Email already exists');
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordHash = await bcrypt.hash(
+      dto.password,
+      this.config.getOrThrow<number>('BCRYPT_SALT_ROUNDS'),
+    );
     const user = await this.prisma.user.create({
       data: { email: dto.email, passwordHash, fullName: dto.fullName ?? null },
       select: { id: true, email: true, role: true, fullName: true },
@@ -156,9 +160,14 @@ export class AuthService {
   }
 
   private async _issueTokens(user: UserInfo): Promise<TokensResponse> {
-    const expiresAt = new Date(
-      Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 ngày
+    const accessTokenExpiresIn = this.config.getOrThrow<StringValue>(
+      'JWT_ACCESS_EXPIRES_IN',
     );
+    const refreshTokenExpiresIn = this.config.getOrThrow<StringValue>(
+      'JWT_REFRESH_EXPIRES_IN',
+    );
+
+    const expiresAt = new Date(Date.now() + ms(refreshTokenExpiresIn));
 
     // Tạo session trước để lấy sessionId cho JWT payload
     const session = await this.prisma.session.create({
@@ -181,16 +190,19 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(payload, {
       secret: accessSecret,
-      expiresIn: '15m',
+      expiresIn: accessTokenExpiresIn,
     });
 
     const refreshToken = this.jwtService.sign(payload, {
       secret: refreshSecret,
-      expiresIn: '7d',
+      expiresIn: refreshTokenExpiresIn,
     });
 
     // Lưu hash của refresh token vào session
-    const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
+    const refreshTokenHash = await bcrypt.hash(
+      refreshToken,
+      this.config.getOrThrow<number>('BCRYPT_SALT_ROUNDS'),
+    );
     await this.prisma.session.update({
       where: { id: session.id },
       data: { refreshTokenHash },
