@@ -5,6 +5,9 @@
   "entryFile": "main-api",
   "compilerOptions": {
     "deleteOutDir": true,
-    "tsConfigPath": "tsconfig.api.json"
+    "tsConfigPath": "tsconfig.api.json",
+    "assets": [
+      { "include": "generated/**/*", "watchAssets": true }
+    ]
   }
 }
