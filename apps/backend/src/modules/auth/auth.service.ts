@@ -11,7 +11,7 @@ import * as bcrypt from 'bcrypt';
 import { UserRole, UserStatus } from '../../generated/prisma';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user.type';
-import { JwtAccessPayload } from './types/jwt-payload.type';
+import { JwtRefreshPayload } from './types/jwt-payload.type';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -25,6 +25,14 @@ type UserInfo = {
   fullName: string | null;
 };
 
+type GeneratedTokens = {
+  accessToken: string;
+  refreshToken: string;
+  refreshTokenHash: string;
+  sessionId: string;
+  expiresAt: Date;
+};
+
 type TokensResponse = {
   accessToken: string;
   refreshToken: string;
@@ -33,11 +41,30 @@ type TokensResponse = {
 
 @Injectable()
 export class AuthService {
+  private readonly accessTokenExpiresIn: StringValue;
+  private readonly refreshTokenExpiresIn: StringValue;
+  private readonly bcryptSaltRounds: number;
+  private readonly jwtAccessSecret: string;
+  private readonly jwtRefreshSecret: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
-  ) {}
+  ) {
+    this.accessTokenExpiresIn = this.config.getOrThrow<StringValue>(
+      'JWT_ACCESS_EXPIRES_IN',
+    );
+    this.refreshTokenExpiresIn = this.config.getOrThrow<StringValue>(
+      'JWT_REFRESH_EXPIRES_IN',
+    );
+    this.bcryptSaltRounds = Number(
+      this.config.getOrThrow<string>('BCRYPT_SALT_ROUNDS'),
+    );
+    this.jwtAccessSecret = this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
+    this.jwtRefreshSecret =
+      this.config.getOrThrow<string>('JWT_REFRESH_SECRET');
+  }
 
   async register(dto: RegisterDto): Promise<TokensResponse> {
     if (dto.password !== dto.confirmPassword) {
@@ -51,16 +78,13 @@ export class AuthService {
       throw new ConflictException('Email already exists');
     }
 
-    const passwordHash = await bcrypt.hash(
-      dto.password,
-      this.config.getOrThrow<number>('BCRYPT_SALT_ROUNDS'),
-    );
+    const passwordHash = await bcrypt.hash(dto.password, this.bcryptSaltRounds);
     const user = await this.prisma.user.create({
       data: { email: dto.email, passwordHash, fullName: dto.fullName ?? null },
       select: { id: true, email: true, role: true, fullName: true },
     });
 
-    return this._issueTokens(user);
+    return this._createSessionAndIssueTokens(user);
   }
 
   async login(dto: LoginDto): Promise<TokensResponse> {
@@ -87,7 +111,7 @@ export class AuthService {
       data: { lastLoginAt: new Date() },
     });
 
-    return this._issueTokens({
+    return this._createSessionAndIssueTokens({
       id: user.id,
       email: user.email,
       role: user.role,
@@ -96,10 +120,10 @@ export class AuthService {
   }
 
   async refresh(dto: RefreshDto): Promise<TokensResponse> {
-    let payload: JwtAccessPayload;
+    let payload: JwtRefreshPayload;
     try {
-      payload = this.jwtService.verify<JwtAccessPayload>(dto.refreshToken, {
-        secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
+      payload = this.jwtService.verify<JwtRefreshPayload>(dto.refreshToken, {
+        secret: this.jwtRefreshSecret,
       });
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
@@ -141,18 +165,40 @@ export class AuthService {
       throw new ForbiddenException('Account has been locked');
     }
 
-    // Refresh Token Rotation: revoke session cũ, tạo session mới
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date() },
+    const tokens = await this._generateTokens(user);
+
+    // Sử dụng transaction để đảm bảo tính toàn vẹn dữ liệu khi thu hồi session cũ và tạo session mới
+    await this.prisma.$transaction(async (tx) => {
+      await tx.session.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      });
+
+      await tx.session.create({
+        data: {
+          id: tokens.sessionId,
+          userId: user.id,
+          refreshTokenHash: tokens.refreshTokenHash,
+          expiresAt: tokens.expiresAt,
+        },
+      });
     });
 
-    return this._issueTokens(user);
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        fullName: user.fullName,
+      },
+    };
   }
 
   async logout(sessionId: string): Promise<{ message: string }> {
-    await this.prisma.session.update({
-      where: { id: sessionId },
+    await this.prisma.session.updateMany({
+      where: { id: sessionId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
     return { message: 'Logged out successfully' };
@@ -170,53 +216,63 @@ export class AuthService {
     return { userId: user.id, email: user.email, role: user.role };
   }
 
-  private async _issueTokens(user: UserInfo): Promise<TokensResponse> {
-    const accessTokenExpiresIn = this.config.getOrThrow<StringValue>(
-      'JWT_ACCESS_EXPIRES_IN',
-    );
-    const refreshTokenExpiresIn = this.config.getOrThrow<StringValue>(
-      'JWT_REFRESH_EXPIRES_IN',
-    );
+  // xử lý database
+  private async _createSessionAndIssueTokens(
+    user: UserInfo,
+  ): Promise<TokensResponse> {
+    const tokens = await this._generateTokens(user);
 
-    const expiresAt = new Date(Date.now() + ms(refreshTokenExpiresIn));
+    await this.prisma.session.create({
+      data: {
+        id: tokens.sessionId,
+        userId: user.id,
+        refreshTokenHash: tokens.refreshTokenHash,
+        expiresAt: tokens.expiresAt,
+      },
+    });
 
-    const sessionId = uuidv7(); // Tạo sessionId mới cho JWT payload
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      user,
+    };
+  }
 
-    const payload: JwtAccessPayload = {
+  // tính toán
+  private async _generateTokens(user: UserInfo): Promise<GeneratedTokens> {
+    const expiresAt = new Date(Date.now() + ms(this.refreshTokenExpiresIn));
+
+    const sessionId = uuidv7();
+
+    const payload: JwtRefreshPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       sessionId: sessionId,
     };
 
-    const accessSecret = this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
-    const refreshSecret = this.config.getOrThrow<string>('JWT_REFRESH_SECRET');
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(payload, {
+        secret: this.jwtAccessSecret,
+        expiresIn: this.accessTokenExpiresIn,
+      }),
+      this.jwtService.signAsync(payload, {
+        secret: this.jwtRefreshSecret,
+        expiresIn: this.refreshTokenExpiresIn,
+      }),
+    ]);
 
-    const accessToken = this.jwtService.sign(payload, {
-      secret: accessSecret,
-      expiresIn: accessTokenExpiresIn,
-    });
-
-    const refreshToken = this.jwtService.sign(payload, {
-      secret: refreshSecret,
-      expiresIn: refreshTokenExpiresIn,
-    });
-
-    // Lưu hash của refresh token vào session
     const refreshTokenHash = await bcrypt.hash(
       refreshToken,
-      this.config.getOrThrow<number>('BCRYPT_SALT_ROUNDS'),
+      this.bcryptSaltRounds,
     );
 
-    await this.prisma.session.create({
-      data: {
-        id: sessionId,
-        userId: user.id,
-        refreshTokenHash,
-        expiresAt,
-      },
-    });
-
-    return { accessToken, refreshToken, user };
+    return {
+      accessToken,
+      refreshToken,
+      refreshTokenHash,
+      sessionId,
+      expiresAt,
+    };
   }
 }
