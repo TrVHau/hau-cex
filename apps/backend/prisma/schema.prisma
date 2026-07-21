@@ -198,6 +198,8 @@ model LedgerEntry {
   entryType     LedgerEntryType   @map("entry_type")
   balanceType   LedgerBalanceType @map("balance_type")
   amount        Decimal           @db.Decimal(38, 18)
+  beforeBalance Decimal           @map("before_balance") @db.Decimal(38, 18)
+  afterBalance  Decimal           @map("after_balance") @db.Decimal(38, 18)
   referenceType String            @map("reference_type") @db.VarChar(50)
   referenceId   String            @map("reference_id") @db.Uuid
   operationId   String            @map("operation_id") @db.Uuid
