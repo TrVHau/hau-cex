@@ -1,4 +1,4 @@
-import { LedgerBalanceType, Prisma } from '../../../generated/prisma';
+import { LedgerEntryType, Prisma } from '../../../generated/prisma';
 import { ReferenceType } from '../../../common/enums/reference-type.enum';
 
 export interface WalletMutationParams {
@@ -10,5 +10,5 @@ export interface WalletMutationParams {
 }
 
 export interface CreditParams extends WalletMutationParams {
-  entryType: LedgerBalanceType;
+  entryType: LedgerEntryType;
 }
