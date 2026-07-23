@@ -5,6 +5,7 @@ import { ConfigModule } from '@nestjs/config';
 import { resolve } from 'node:path';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { WalletsModule } from './modules/wallets/wallets.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { AuthModule } from './modules/auth/auth.module';
     }),
     PrismaModule,
     AuthModule,
+    WalletsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

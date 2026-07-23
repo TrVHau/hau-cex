@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   WalletMutationParams,
   CreditParams,
@@ -16,6 +11,7 @@ import {
 } from '../../generated/prisma';
 import { PrismaTx } from '../../common/types/prisma-tx.type';
 import { InsufficientBalanceException } from '../../common/exceptions/insufficient-balance.exception';
+import { InvalidAmountException } from '../../common/exceptions/invalid-amount.exception';
 
 interface WalletRawRow {
   id: string;
@@ -219,7 +215,7 @@ export class WalletBalanceService {
 
   private validateAmount(amount: Prisma.Decimal): void {
     if (amount.lessThanOrEqualTo(0)) {
-      throw new BadRequestException('Amount must be greater than zero');
+      throw new InvalidAmountException();
     }
   }
 

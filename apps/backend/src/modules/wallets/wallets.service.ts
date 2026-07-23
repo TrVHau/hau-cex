@@ -30,7 +30,7 @@ type LedgerWithAsset = Prisma.LedgerEntryGetPayload<{
 }>;
 
 @Injectable()
-export class WalletsService {
+export class WalletService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getMyWallets(userId: string): Promise<WalletResponseDto[]> {
