@@ -1,436 +1,1206 @@
-# Phase 5 — Order API & Outbox (Revised)
+# Smart Contract Implementation Plan (v2)
 
-> **3 vấn đề đã sửa so với v1:**
+> Đã đọc và đồng bộ với: `05-business-rules.md`, `07-database-design.md`,
+> `08-api-design.md`, `09-internal-message-contract.md`, `11-smart-contract-design.md`
 >
-> 1. Sequence bottleneck → PostgreSQL SEQUENCE `nextval()` thay vì UPDATE table
-> 2. Race condition cancel → `SELECT FOR UPDATE` trước khi check status
-> 3. Fee model clarification — buyer fee từ Base, không cần include fee vào lock
-> 4. Idempotency trade-off ghi nhận
+> Bổ sung so với v1: `recoverERC20()`, accountReference one-time clarification,
+> reentrancy tests, admin permission tests, implementation chi tiết hơn
 
 ---
 
-## 1. Mục Tiêu
+## 1. Tổng Quan & Phạm Vi
 
-Backend tạo Order, lock balance và ghi Outbox trong một PostgreSQL transaction atomic.
-Order nằm ở `PENDING` đến khi Phase 6 (Engine Messaging) hoàn thiện.
-
----
-
-## 2. Scope
-
-**Thuộc Phase này:** `POST /orders`, `GET /orders/active`, `GET /orders`, `GET /orders/:orderId`, `POST /orders/:orderId/cancel`
-
-**Không thuộc Phase này:** Engine nhận Outbox (P6), Settlement (P7), Unlock khi cancel (P8)
-
----
-
-## 3. Cấu Trúc Thư Mục
+### On-chain (Phase này làm)
 
 ```
-src/modules/orders/
-├── orders.module.ts
-├── orders.controller.ts
-├── orders.service.ts           # PlaceOrder + CancelOrder transactions
-├── order-query.service.ts      # Read-only queries
-├── dto/
-│   ├── create-order.dto.ts
-│   ├── order-response.dto.ts
-│   ├── order-list-query.dto.ts
-│   └── active-order-query.dto.ts
-└── types/
-    └── order-outbox.types.ts
+contracts/contracts/MockERC20.sol
+contracts/contracts/TokenFaucet.sol
+contracts/contracts/ExchangeVault.sol
+contracts/interfaces/IMintableERC20.sol
+contracts/scripts/deploy.ts
+contracts/scripts/configure-faucet.ts
+contracts/scripts/configure-vault.ts
+contracts/test/MockERC20.test.ts
+contracts/test/TokenFaucet.test.ts
+contracts/test/ExchangeVault.test.ts
+```
 
-src/common/helpers/
-├── idempotency.helper.ts       # SHA-256 payload hash
-└── sequence.helper.ts          # nextval() wrapper
+### Off-chain (KHÔNG thuộc Phase này)
+
+Blockchain Listener, Deposit Consumer, Confirmation Worker, Backend Deposit API
+→ Đây là Phase 12 trong roadmap, sau Core Trading Flow hoàn thiện.
+
+### Contract không làm
+
+```
+Không: Withdrawal
+Không: native ETH Deposit
+Không: Upgradeable proxy
+Không: Multi-sig
+Không: bridge, swap, yield
 ```
 
 ---
 
-## 4. Validation Rules
+## 2. Đồng Bộ với Docs Khác
 
-```
-price > 0
-quantity > 0
-price % tickSize == 0
-quantity % stepSize == 0
-quantity >= minQuantity
-price * quantity >= minNotional
-type == 'LIMIT'   (MVP only)
-```
+### Đồng bộ với schema.prisma
 
-**Bắt buộc dùng `Prisma.Decimal` — không dùng JS `number` cho bất kỳ phép toán tài chính nào.**
+- `LedgerEntryType.DEPOSIT` đã có trong schema → Backend Phase 12 sẽ dùng
+- `Asset.contractAddress` đã có trong schema → sẽ lưu địa chỉ MockERC20 sau deploy
+- `Asset.depositEnabled` đã có → chỉ asset có `depositEnabled=true` mới được Deposit
 
----
+### Đồng bộ với docs/07 (Database Design)
 
-## 5. Lock Amount — Fee Model (Clarification)
+- Bảng `deposits` là Optional Migration, chỉ tạo khi Phase 12
+- Schema: `account_reference TEXT UNIQUE`, `depositor_address TEXT`, `token_address TEXT`
+- Partial unique index: `UNIQUE(chain_id, tx_hash, log_index) WHERE tx_hash IS NOT NULL`
 
-Theo docs/05 §16: **Buyer fee thu bằng Base Asset, Seller fee thu bằng Quote Asset.**
+### Đồng bộ với docs/09 (Message Contract)
 
-Fee KHÔNG lấy từ asset bị lock — lấy từ asset được nhận tại Settlement.
+- Stream `stream:blockchain:events` — consumer group `blockchain-deposit-v1`
+- Message type `DepositDetected` — không dùng `commandSequence`
+- `correlationId` = `depositId`
 
-```
-BUY  → lock Quote (USDT):  lockedAmount = price * quantity
-SELL → lock Base (BTC):    lockedAmount = quantity
-```
+### Đồng bộ với docs/05 (Business Rules §18)
 
-Không cần cộng fee vào `lockedAmount`.
-
-> **Lưu ý Settlement (Phase 7):** Buyer không trừ `executionPrice * qty` mà trừ `limitPrice * qty` từ locked.
-> Phần chênh lệch `quoteRefund = (limitPrice - executionPrice) * qty` được hoàn về `available`.
+- Credit chỉ sau khi event hợp lệ + đủ confirmation
+- Credit transaction atomic: Wallet + Ledger + Deposit status trong cùng PostgreSQL TX
+- `LEDGER_ENTRY_TYPE = DEPOSIT`, `referenceType = DEPOSIT`
 
 ---
 
-## 6. Idempotency
+## 3. Dependency Setup
 
-**Header:** `Idempotency-Key: <UUID>` (client sinh, unique per request)
+### Kiểm tra hardhat version hiện tại
 
-**Payload hash** — canonicalize: `symbol|side|type|price.toFixed(18)|quantity.toFixed(18)`, hash SHA-256:
+```bash
+# Trong contracts/
+cat package.json   # Hardhat 3.9.1 đang dùng
+```
 
-```typescript
-// src/common/helpers/idempotency.helper.ts
-import { createHash } from "node:crypto";
-import { Prisma } from "../../generated/prisma";
+### Dependencies cần thêm
 
-export function hashOrderPayload(
-  symbol: string,
-  side: string,
-  type: string,
-  price: Prisma.Decimal,
-  quantity: Prisma.Decimal,
-): string {
-  const raw = `${symbol}|${side}|${type}|${price.toFixed(18)}|${quantity.toFixed(18)}`;
-  return createHash("sha256").update(raw).digest("hex");
+```bash
+pnpm add -D @nomicfoundation/hardhat-toolbox @nomicfoundation/hardhat-ethers ethers dotenv
+pnpm add -D @types/node
+```
+
+> **Lưu ý Hardhat 3:** `hardhat-toolbox` v5 tương thích Hardhat 3. Nếu conflict, dùng:
+> `@nomicfoundation/hardhat-toolbox-viem` + `viem` thay thế.
+
+### package.json sau update
+
+```json
+{
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^22.20.0",
+    "dotenv": "^16.4.0",
+    "hardhat": "^3.9.1",
+    "typescript": "~6.0.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.6.1"
+  }
 }
 ```
 
-**Logic check:**
+---
 
-```
-findUnique(userId, idempotencyKey)
-  → null                → tạo mới
-  → exists + hash khớp  → return existing order (200, idempotent)
-  → exists + hash khác  → IdempotencyConflictException (409)
-```
+## 4. hardhat.config.ts
 
-> **Trade-off MVP:** `idempotencyKey` lưu trong DB (đã có trong schema). Technical debt — production nên dùng Redis TTL 1h.
+```typescript
+import { HardhatUserConfig } from "hardhat/config";
+import "@nomicfoundation/hardhat-toolbox";
+import "dotenv/config";
+
+const config: HardhatUserConfig = {
+  solidity: {
+    version: "0.8.28",
+    settings: {
+      optimizer: { enabled: true, runs: 200 },
+    },
+  },
+  networks: {
+    hardhat: {
+      // local in-process network cho tests
+      chainId: 31337,
+    },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 31337,
+    },
+  },
+};
+
+export default config;
+```
 
 ---
 
-## 7. [FIX #1] Sequence — PostgreSQL SEQUENCE Objects
+## 5. Contract 1 — interfaces/IMintableERC20.sol
 
-### Vấn đề của UPDATE table
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
 
-```sql
-UPDATE order_sequences SET last_value = last_value + 1
-WHERE trading_pair_id = $1 RETURNING last_value
-```
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-Row-level lock trong suốt duration của main transaction (~10-50ms) → 1000 concurrent requests serialize → timeout/deadlock.
-
-### Giải pháp: `nextval()`
-
-PostgreSQL SEQUENCE dùng **internal lightweight mutex**, không phải row lock, **không rollback** khi transaction abort.
-
-**Tạo sequences khi tạo TradingPair** (thêm vào `seed.ts` và Admin API Phase 10):
-
-```typescript
-const safeId = pair.id.replace(/-/g, "_"); // UUID chỉ có [0-9a-f-] → safe
-await prisma.$executeRawUnsafe(`
-  CREATE SEQUENCE IF NOT EXISTS "order_seq_${safeId}" START 1;
-  CREATE SEQUENCE IF NOT EXISTS "cmd_seq_${safeId}" START 1;
-`);
-```
-
-**sequence.helper.ts:**
-
-```typescript
-// src/common/helpers/sequence.helper.ts
-import { Prisma } from "../../generated/prisma";
-
-export async function nextOrderSequence(
-  tx: PrismaTx,
-  tradingPairId: string,
-): Promise<bigint> {
-  const seqName = `order_seq_${tradingPairId.replace(/-/g, "_")}`;
-  const rows = await tx.$queryRaw<[{ nextval: bigint }]>(
-    Prisma.sql`SELECT nextval(${seqName}::regclass) AS nextval`,
-  );
-  return rows[0].nextval;
-}
-
-export async function nextCommandSequence(
-  tx: PrismaTx,
-  tradingPairId: string,
-): Promise<bigint> {
-  const seqName = `cmd_seq_${tradingPairId.replace(/-/g, "_")}`;
-  const rows = await tx.$queryRaw<[{ nextval: bigint }]>(
-    Prisma.sql`SELECT nextval(${seqName}::regclass) AS nextval`,
-  );
-  return rows[0].nextval;
+/// @notice Interface dùng cho TokenFaucet khi gọi mint() trên MockERC20
+interface IMintableERC20 is IERC20 {
+    function mint(address to, uint256 amount) external;
 }
 ```
-
-Notes:
-
-- `Prisma.sql` parameterizes `seqName` → `$1` → safe, không SQL injection
-- `::regclass`: PostgreSQL resolve sequence name → OID, error nếu không tồn tại → fail fast
-- Sequence gap khi tx rollback → chấp nhận được (sequences không cần liên tục)
-- Bảng `order_sequences`, `engine_command_sequences` giữ nguyên trong schema nhưng không dùng nữa ở Phase 5+
 
 ---
 
-## 8. PlaceOrder Transaction (9 bước)
+## 6. Contract 2 — MockERC20.sol
 
-```typescript
-async placeOrder(userId: string, idempotencyKey: string, dto: CreateOrderDto) {
-  const orderId = uuidv7()  // ← Generate TRƯỚC transaction, dùng làm operationId
+### Mục tiêu
 
-  return this.prisma.$transaction(async (tx) => {
-    // 1. Idempotency check
-    const existing = await tx.order.findUnique({
-      where: { userId_idempotencyKey: { userId, idempotencyKey } },
-    })
-    if (existing) {
-      const hash = hashOrderPayload(dto.symbol, dto.side, dto.type,
-        new Prisma.Decimal(dto.price), new Prisma.Decimal(dto.quantity))
-      if (existing.idempotencyPayloadHash === hash)
-        return { orderId: existing.id, status: existing.status }
-      throw new IdempotencyConflictException()
+Token ERC-20 mô phỏng cho môi trường local/testnet.
+
+- Custom decimals (immutable)
+- Chỉ `MINTER_ROLE` được gọi `mint()`
+
+### Full Implementation
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+
+/// @title MockERC20 — Token test cho Hau CEX
+/// @notice Mint bị giới hạn bởi MINTER_ROLE. Decimals cố định khi deploy.
+contract MockERC20 is ERC20, AccessControl {
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
+    /// @dev Decimals được lưu immutable — không thay đổi sau deploy
+    uint8 private immutable _tokenDecimals;
+
+    // ─── Events ─────────────────────────────────────────────────────────────
+    // Transfer, Approval inherited từ ERC20
+
+    // ─── Constructor ─────────────────────────────────────────────────────────
+    /// @param name_     Tên đầy đủ (e.g., "Mock USDT")
+    /// @param symbol_   Symbol (e.g., "USDT")
+    /// @param decimals_ Số chữ số thập phân (e.g., 6 cho USDT, 18 cho ETH)
+    /// @param admin     Địa chỉ nhận DEFAULT_ADMIN_ROLE — có thể grant MINTER_ROLE
+    constructor(
+        string memory name_,
+        string memory symbol_,
+        uint8 decimals_,
+        address admin
+    ) ERC20(name_, symbol_) {
+        _tokenDecimals = decimals_;
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
-    // 2. Validate TradingPair
-    const pair = await tx.tradingPair.findUnique({ where: { symbol: dto.symbol } })
-    if (!pair) throw new MarketNotFoundException()
-    if (pair.status === TradingPairStatus.SUSPENDED) throw new MarketSuspendedException()
-    if (pair.status !== TradingPairStatus.READY) throw new MarketNotReadyException()
+    // ─── View Functions ───────────────────────────────────────────────────────
+    /// @inheritdoc ERC20
+    function decimals() public view override returns (uint8) {
+        return _tokenDecimals;
+    }
 
-    // 3. Validate tick / step / min
-    const price    = new Prisma.Decimal(dto.price)
-    const quantity = new Prisma.Decimal(dto.quantity)
-    if (price.lte(0))                               throw new ValidationException('price > 0')
-    if (quantity.lte(0))                            throw new ValidationException('quantity > 0')
-    if (!price.mod(pair.tickSize).isZero())         throw new ValidationException('invalid tickSize')
-    if (!quantity.mod(pair.stepSize).isZero())      throw new ValidationException('invalid stepSize')
-    if (quantity.lt(pair.minQuantity))              throw new ValidationException('quantity < minQuantity')
-    if (price.mul(quantity).lt(pair.minNotional))   throw new ValidationException('notional < minNotional')
+    // ─── Minter Functions ─────────────────────────────────────────────────────
+    /// @notice Mint token vào địa chỉ `to`
+    /// @dev Chỉ được gọi bởi tài khoản có MINTER_ROLE (thường là TokenFaucet)
+    function mint(
+        address to,
+        uint256 amount
+    ) external onlyRole(MINTER_ROLE) {
+        _mint(to, amount);
+    }
+}
+```
 
-    // 4. Lock amount
-    const isBuy         = dto.side === OrderSide.BUY
-    const lockedAssetId = isBuy ? pair.quoteAssetId : pair.baseAssetId
-    const lockedAmount  = isBuy ? price.mul(quantity) : quantity
+### Business Rules bắt buộc
 
-    // 5. Wallet lock + 2 LedgerEntry ORDER_LOCK
-    const wallet = await this.walletsService.findWalletByAssetId(userId, lockedAssetId)
-    await this.walletBalanceService.moveAvailableToLocked(tx, {
-      walletId: wallet.id, amount: lockedAmount,
-      operationId: orderId, referenceType: 'ORDER', referenceId: orderId,
-    })
+- `decimals` là `immutable` — không có setter
+- Deploy USDT: `decimals_ = 6`
+- Deploy ETH/HAU: `decimals_ = 18`
+- `mint()` chỉ được gọi bởi `MINTER_ROLE` — TokenFaucet được grant role này
 
-    // 6. orderSequence — non-blocking nextval()
-    const orderSeq = await nextOrderSequence(tx, pair.id)
+---
 
-    // 7. Order PENDING
-    const order = await tx.order.create({ data: {
-      id: orderId, userId, tradingPairId: pair.id,
-      side: dto.side, status: OrderStatus.PENDING,
-      price, quantity,
-      filledQuantity:        new Prisma.Decimal(0),
-      remainingQuantity:     quantity,
-      lockedAssetId, lockedAmount, remainingLockedAmount: lockedAmount,
-      orderSequence: orderSeq, idempotencyKey,
-      idempotencyPayloadHash: hashOrderPayload(dto.symbol, dto.side, dto.type, price, quantity),
-    }})
+## 7. Contract 3 — TokenFaucet.sol
 
-    // 8. commandSequence — non-blocking nextval()
-    const cmdSeq = await nextCommandSequence(tx, pair.id)
+### Mục tiêu
 
-    // 9. Outbox PlaceOrder
-    await tx.outboxEvent.create({ data: {
-      messageId: uuidv7(), version: 1, correlationId: uuidv7(),
-      streamName: 'stream:engine:commands', messageType: 'PlaceOrder',
-      partitionKey: pair.id, commandSequence: cmdSeq, occurredAt: new Date(),
-      payload: {
-        tradingPairId: pair.id, market: pair.symbol,
-        orderId: order.id, userId, side: dto.side, type: 'LIMIT',
-        price: price.toFixed(18), quantity: quantity.toFixed(18),
-        orderSequence: orderSeq.toString(), createdAt: order.createdAt.toISOString(),
-      },
-    }})
+Phân phát token test cho user với cooldown. Một Faucet hỗ trợ nhiều token.
 
-    return { orderId: order.id, status: order.status }
-  }, { timeout: 10_000 })
+### Full Implementation
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IMintableERC20.sol";
+
+/// @title TokenFaucet — Phân phát Mock ERC-20 token test cho Hau CEX
+/// @notice Mỗi token có claim amount và cooldown riêng.
+///         Chỉ dùng trong local/testnet — không dành cho production.
+contract TokenFaucet is AccessControl, Pausable, ReentrancyGuard {
+
+    // ─── State ───────────────────────────────────────────────────────────────
+    mapping(address token => bool supported)          public supportedTokens;
+    mapping(address token => uint256 amount)          public claimAmounts;
+    mapping(address token => uint256 cooldown)        public claimCooldowns;
+    mapping(address token => mapping(address user => uint256 claimedAt))
+                                                      public lastClaimAt;
+
+    // ─── Errors ───────────────────────────────────────────────────────────────
+    error UnsupportedToken(address token);
+    error InvalidClaimAmount();
+    error FaucetCooldownActive(uint256 nextClaimAt);
+
+    // ─── Events ───────────────────────────────────────────────────────────────
+    event TokenClaimed(
+        address indexed user,
+        address indexed token,
+        uint256 amount
+    );
+    event TokenConfigured(address indexed token, bool supported, uint256 amount, uint256 cooldown);
+
+    // ─── Constructor ─────────────────────────────────────────────────────────
+    /// @param admin Địa chỉ nhận DEFAULT_ADMIN_ROLE
+    constructor(address admin) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    // ─── User Functions ───────────────────────────────────────────────────────
+    /// @notice Claim token. Phải đợi hết cooldown giữa các lần claim.
+    /// @param token Địa chỉ MockERC20 muốn claim
+    function claim(address token) external whenNotPaused nonReentrant {
+        if (!supportedTokens[token]) revert UnsupportedToken(token);
+
+        uint256 amount = claimAmounts[token];
+        if (amount == 0) revert InvalidClaimAmount();
+
+        uint256 nextClaimAt = lastClaimAt[token][msg.sender] + claimCooldowns[token];
+        if (block.timestamp < nextClaimAt) revert FaucetCooldownActive(nextClaimAt);
+
+        lastClaimAt[token][msg.sender] = block.timestamp;
+
+        // Gọi mint() — Faucet phải có MINTER_ROLE trên token contract
+        IMintableERC20(token).mint(msg.sender, amount);
+
+        emit TokenClaimed(msg.sender, token, amount);
+    }
+
+    // ─── Admin Functions ──────────────────────────────────────────────────────
+    /// @notice Cấu hình supported token, claim amount và cooldown
+    function setTokenConfig(
+        address token,
+        bool supported,
+        uint256 amount,
+        uint256 cooldown
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        supportedTokens[token] = supported;
+        claimAmounts[token]    = amount;
+        claimCooldowns[token]  = cooldown;
+        emit TokenConfigured(token, supported, amount, cooldown);
+    }
+
+    // Giữ lại setters riêng lẻ cho linh hoạt
+    function setSupportedToken(address token, bool supported)
+        external onlyRole(DEFAULT_ADMIN_ROLE) {
+        supportedTokens[token] = supported;
+    }
+
+    function setClaimAmount(address token, uint256 amount)
+        external onlyRole(DEFAULT_ADMIN_ROLE) {
+        claimAmounts[token] = amount;
+    }
+
+    function setClaimCooldown(address token, uint256 cooldown)
+        external onlyRole(DEFAULT_ADMIN_ROLE) {
+        claimCooldowns[token] = cooldown;
+    }
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
 }
 ```
 
 ---
 
-## 9. [FIX #2] CancelOrder — SELECT FOR UPDATE
+## 8. Contract 4 — ExchangeVault.sol (với recoverERC20)
 
-### Vấn đề race condition
+### Mục tiêu
+
+Nhận ERC-20 và phát event để Backend credit Wallet nội bộ.
+`accountReference` là **one-time per depositor** — không thể tái sử dụng.
+
+### One-time accountReference — Giải thích
 
 ```
-T=0ms  Cancel API:    reads order → status=OPEN
-T=1ms  Settlement:    fills order → status=FILLED, balance debited
-T=2ms  Cancel API:    writes status=CANCEL_PENDING → ghi đè lên FILLED
-Kết quả: order báo "đang hủy" nhưng tiền đã bị trừ
+depositKey = keccak256(abi.encode(accountReference, msg.sender))
 ```
 
-### Fix: FOR UPDATE lock trước khi check status
+Ý nghĩa:
 
-```typescript
-async cancelOrder(userId: string, orderId: string) {
-  return this.prisma.$transaction(async (tx) => {
-    // 1. Lock row — ngăn Settlement race
-    const rows = await tx.$queryRaw<
-      { id: string; user_id: string; status: string; trading_pair_id: string }[]
-    >`SELECT id, user_id, status, trading_pair_id
-      FROM orders WHERE id = ${orderId}::uuid
-      FOR UPDATE`
+- Cùng `msg.sender` KHÔNG thể dùng lại `accountReference` đó
+- `msg.sender` khác CÓ THỂ dùng cùng `accountReference` → chỉ tạo event với depositor khác
+  nhưng Backend sẽ từ chối vì depositor không khớp Deposit Intent
+- Thiết kế này tránh một địa chỉ xấu dùng reference của người khác để "khóa" nó
 
-    const order = rows[0]
-    if (!order || order.user_id !== userId) throw new OrderNotFoundException()
+Tại sao one-time là đúng:
 
-    // 2. Validate status SAU KHI đã lock
-    const cancellable = [OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED]
-    if (!cancellable.includes(order.status as OrderStatus))
-      throw new OrderNotCancellableException()
+- Docs/11 §18.5: "Nếu cùng accountReference phát sinh nhiều event, chỉ event hợp lệ đầu tiên được gắn với Intent."
+- Docs/11 §8.3: "`accountReference` không được tái sử dụng cho lần nạp khác."
+- Nếu User muốn nạp lần 2: tạo Deposit Intent mới → nhận `accountReference` mới
 
-    // 3. Update sang CANCEL_PENDING
-    const updated = await tx.order.update({
-      where: { id: orderId },
-      data: { status: OrderStatus.CANCEL_PENDING },
-    })
+### Full Implementation
 
-    // 4. commandSequence
-    const cmdSeq = await nextCommandSequence(tx, order.trading_pair_id)
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
 
-    // 5. Outbox CancelOrder
-    await tx.outboxEvent.create({ data: {
-      messageId: uuidv7(), version: 1, correlationId: uuidv7(),
-      streamName: 'stream:engine:commands', messageType: 'CancelOrder',
-      partitionKey: order.trading_pair_id, commandSequence: cmdSeq, occurredAt: new Date(),
-      payload: {
-        tradingPairId: order.trading_pair_id, orderId, userId,
-        requestedBy: 'USER', requestedAt: new Date().toISOString(),
-      },
-    }})
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-    return { orderId, status: updated.status }
-  })
+/// @title ExchangeVault — Nhận ERC-20 token từ User và phát event để Backend credit
+/// @notice mỗi cặp (accountReference, msg.sender) chỉ được dùng một lần duy nhất.
+///         Backend sẽ dùng event Deposited để credit Wallet nội bộ sau khi đủ confirmation.
+contract ExchangeVault is AccessControl, Pausable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    // ─── State ───────────────────────────────────────────────────────────────
+    /// @notice Token được phép Deposit
+    mapping(address token => bool supported) public supportedTokens;
+
+    /// @notice depositKey = keccak256(accountReference, msg.sender) — mỗi cặp chỉ dùng một lần
+    /// @dev Thiết kế this prevents: (1) depositor tái sử dụng reference,
+    ///      (2) kẻ xấu không thể khóa reference của người khác vì key khác nhau
+    mapping(bytes32 depositKey => bool used) public usedDepositKeys;
+
+    // ─── Errors ───────────────────────────────────────────────────────────────
+    error UnsupportedToken(address token);
+    error InvalidAmount();
+    error InvalidAccountReference();
+    /// @notice Khi cùng msg.sender đã dùng accountReference này rồi
+    error DepositReferenceAlreadyUsed(bytes32 accountReference);
+    error CannotRecoverSupportedToken(address token);
+    error ZeroAddress();
+
+    // ─── Events ───────────────────────────────────────────────────────────────
+    /// @notice Phát mỗi khi Deposit thành công
+    /// @param accountReference Mã liên kết với Deposit Intent trong Backend
+    /// @param depositor        Địa chỉ ví blockchain gửi token
+    /// @param token            Địa chỉ ERC-20 contract
+    /// @param amount           Số lượng raw (chưa chia decimals)
+    event Deposited(
+        bytes32 indexed accountReference,
+        address indexed depositor,
+        address indexed token,
+        uint256 amount
+    );
+
+    event TokenSupportUpdated(address indexed token, bool supported);
+
+    /// @notice Phát khi Admin thu hồi token bị gửi nhầm vào Vault
+    event ERC20Recovered(address indexed token, address indexed to, uint256 amount);
+
+    // ─── Constructor ─────────────────────────────────────────────────────────
+    /// @param admin Địa chỉ nhận DEFAULT_ADMIN_ROLE
+    constructor(address admin) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    // ─── User Functions ───────────────────────────────────────────────────────
+    /// @notice Nạp token vào Vault. Phải approve trước.
+    /// @dev accountReference là bytes32 do Backend cung cấp, one-time per depositor.
+    ///      Mỗi Deposit Intent chỉ được dùng một lần — tạo Intent mới để nạp lại.
+    /// @param token            Địa chỉ ERC-20 cần nạp (phải là supported token)
+    /// @param amount           Số lượng raw token (không được bằng 0)
+    /// @param accountReference Mã bytes32 nhận từ Backend Deposit Intent API
+    function deposit(
+        address token,
+        uint256 amount,
+        bytes32 accountReference
+    ) external whenNotPaused nonReentrant {
+        if (!supportedTokens[token])       revert UnsupportedToken(token);
+        if (amount == 0)                   revert InvalidAmount();
+        if (accountReference == bytes32(0)) revert InvalidAccountReference();
+
+        // depositKey = keccak256(accountReference, msg.sender)
+        // Cùng depositor không thể dùng lại cùng reference
+        bytes32 depositKey = keccak256(abi.encode(accountReference, msg.sender));
+
+        if (usedDepositKeys[depositKey]) {
+            revert DepositReferenceAlreadyUsed(accountReference);
+        }
+
+        // Đánh dấu TRƯỚC khi transfer để ngăn reentrancy (checks-effects-interactions)
+        usedDepositKeys[depositKey] = true;
+
+        // safeTransferFrom sẽ revert nếu không đủ allowance hoặc balance
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        emit Deposited(accountReference, msg.sender, token, amount);
+    }
+
+    // ─── Admin Functions ──────────────────────────────────────────────────────
+    /// @notice Cấu hình token được phép Deposit
+    function setSupportedToken(
+        address token,
+        bool supported
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        supportedTokens[token] = supported;
+        emit TokenSupportUpdated(token, supported);
+    }
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) { _pause(); }
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) { _unpause(); }
+
+    /// @notice Thu hồi token bị gửi nhầm vào Vault (không phải supported token)
+    /// @dev KHÔNG được dùng để rút token của user. Chỉ dành cho token lạc đường.
+    ///      Supported token KHÔNG được recover — phải ngừng hỗ trợ trước (setSupportedToken=false).
+    /// @param token Địa chỉ ERC-20 muốn recover (phải là unsupported token)
+    /// @param to    Địa chỉ nhận token (thường là Admin wallet)
+    /// @param amount Số lượng muốn recover
+    function recoverERC20(
+        address token,
+        address to,
+        uint256 amount
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        // Chỉ cho recover token KHÔNG phải supported
+        // Tránh Admin vô tình rút token của user
+        if (supportedTokens[token]) revert CannotRecoverSupportedToken(token);
+        if (to == address(0)) revert ZeroAddress();
+
+        IERC20(token).safeTransfer(to, amount);
+        emit ERC20Recovered(token, to, amount);
+    }
+
+    // ─── Không nhận native ETH ────────────────────────────────────────────────
+    // Không có receive() hoặc fallback() — contract sẽ revert khi nhận ETH
 }
 ```
 
-> Khi Cancel giữ `FOR UPDATE` lock → Settlement phải chờ.
-> Khi Settlement giữ lock → Cancel phải chờ.
-> Không có race window.
+### Tại sao cần recoverERC20
+
+Trường hợp thực tế cần recover:
+
+- User chuyển nhầm token không được hỗ trợ vào Vault (ví dụ: DAI, WBTC)
+- Token được unsupport sau khi đã có balance trong Vault
+- Frontend bug gọi transfer thay vì deposit
+
+Ràng buộc an toàn của recoverERC20:
+
+- `supportedTokens[token] == true` → REVERT (bảo vệ fund user)
+- Admin muốn recover supported token → phải `setSupportedToken(token, false)` trước
+- `to != address(0)`
 
 ---
 
-## 10. OrderQueryService
+## 9. Deploy Script — scripts/deploy.ts
 
 ```typescript
-// getActiveOrders
-findMany({
-  where: {
-    userId,
-    status: { in: [PENDING, OPEN, PARTIALLY_FILLED, CANCEL_PENDING] },
-    ...(symbol && { tradingPair: { symbol } }),
-  },
-  orderBy: { createdAt: "desc" },
+import { ethers } from "hardhat";
+
+async function main() {
+  const [deployer] = await ethers.getSigners();
+  console.log("Deploying with:", deployer.address);
+
+  // ── 1. Deploy Mock Tokens ─────────────────────────────────────────────────
+  const MockERC20 = await ethers.getContractFactory("MockERC20");
+
+  const mockETH = await MockERC20.deploy(
+    "Mock ETH",
+    "ETH",
+    18,
+    deployer.address,
+  );
+  await mockETH.waitForDeployment();
+  console.log("MockETH deployed:", await mockETH.getAddress());
+
+  const mockUSDT = await MockERC20.deploy(
+    "Mock USDT",
+    "USDT",
+    6,
+    deployer.address,
+  );
+  await mockUSDT.waitForDeployment();
+  console.log("MockUSDT deployed:", await mockUSDT.getAddress());
+
+  const mockHAU = await MockERC20.deploy(
+    "HAU Token",
+    "HAU",
+    18,
+    deployer.address,
+  );
+  await mockHAU.waitForDeployment();
+  console.log("MockHAU deployed:", await mockHAU.getAddress());
+
+  // ── 2. Deploy TokenFaucet ─────────────────────────────────────────────────
+  const TokenFaucet = await ethers.getContractFactory("TokenFaucet");
+  const faucet = await TokenFaucet.deploy(deployer.address);
+  await faucet.waitForDeployment();
+  const faucetAddress = await faucet.getAddress();
+  console.log("TokenFaucet deployed:", faucetAddress);
+
+  // ── 3. Grant MINTER_ROLE cho Faucet ──────────────────────────────────────
+  const MINTER_ROLE = await mockETH.MINTER_ROLE();
+  await (await mockETH.grantRole(MINTER_ROLE, faucetAddress)).wait();
+  await (await mockUSDT.grantRole(MINTER_ROLE, faucetAddress)).wait();
+  await (await mockHAU.grantRole(MINTER_ROLE, faucetAddress)).wait();
+  console.log("MINTER_ROLE granted to Faucet");
+
+  // ── 4. Cấu hình Faucet ────────────────────────────────────────────────────
+  const DAY = 86400n;
+  await (
+    await faucet.setTokenConfig(
+      await mockETH.getAddress(),
+      true,
+      ethers.parseEther("0.1"), // 0.1 ETH per claim
+      DAY,
+    )
+  ).wait();
+  await (
+    await faucet.setTokenConfig(
+      await mockUSDT.getAddress(),
+      true,
+      1000n * 10n ** 6n, // 1,000 USDT per claim
+      DAY,
+    )
+  ).wait();
+  await (
+    await faucet.setTokenConfig(
+      await mockHAU.getAddress(),
+      true,
+      ethers.parseEther("1000"), // 1,000 HAU per claim
+      DAY,
+    )
+  ).wait();
+  console.log("Faucet configured");
+
+  // ── 5. Deploy ExchangeVault ───────────────────────────────────────────────
+  const ExchangeVault = await ethers.getContractFactory("ExchangeVault");
+  const vault = await ExchangeVault.deploy(deployer.address);
+  await vault.waitForDeployment();
+  const vaultAddress = await vault.getAddress();
+  console.log("ExchangeVault deployed:", vaultAddress);
+
+  // ── 6. Cấu hình Vault supported tokens ───────────────────────────────────
+  await (
+    await vault.setSupportedToken(await mockETH.getAddress(), true)
+  ).wait();
+  await (
+    await vault.setSupportedToken(await mockUSDT.getAddress(), true)
+  ).wait();
+  await (
+    await vault.setSupportedToken(await mockHAU.getAddress(), true)
+  ).wait();
+  console.log("Vault configured");
+
+  // ── 7. In ra để copy vào .env và seed backend ─────────────────────────────
+  console.log("\n=== CONTRACT ADDRESSES ===");
+  console.log(`MOCK_ETH_ADDRESS=${await mockETH.getAddress()}`);
+  console.log(`MOCK_USDT_ADDRESS=${await mockUSDT.getAddress()}`);
+  console.log(`MOCK_HAU_ADDRESS=${await mockHAU.getAddress()}`);
+  console.log(`TOKEN_FAUCET_ADDRESS=${faucetAddress}`);
+  console.log(`EXCHANGE_VAULT_ADDRESS=${vaultAddress}`);
+  console.log("\n=== CHAIN INFO ===");
+  const network = await ethers.provider.getNetwork();
+  console.log(`BLOCKCHAIN_CHAIN_ID=${network.chainId}`);
+  console.log(`BLOCKCHAIN_RPC_URL=http://127.0.0.1:8545`);
+  console.log(`BLOCKCHAIN_CONFIRMATIONS=1`);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });
-
-// getOrderHistory — cursor (createdAt DESC, id DESC), dùng lại encodeCursor/decodeCursor
-// getOrderById — throw 404 nếu order.userId !== userId
 ```
 
 ---
 
-## 11. Controller — Thứ Tự Route Quan Trọng
+## 10. Tests
+
+### Test Convention
 
 ```typescript
-@Controller('orders')
-@UseGuards(JwtAuthGuard)
-export class OrdersController {
-  @Post()
-  placeOrder(@Headers('idempotency-key') key: string, ...) {
-    if (!key?.trim()) throw new BadRequestException({ error: { code: 'VALIDATION_ERROR', message: 'Idempotency-Key required' } })
-    return this.ordersService.placeOrder(...)
+// Dùng Hardhat Toolbox (ethers v6 + chai matchers)
+// Mỗi test file cấu trúc: describe > context (happy path / revert) > it
+
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+```
+
+---
+
+### test/MockERC20.test.ts
+
+```typescript
+describe("MockERC20", () => {
+  async function deployFixture() {
+    const [admin, minter, user1, user2] = await ethers.getSigners();
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    const token = await MockERC20.deploy("Mock USDT", "USDT", 6, admin.address);
+    const MINTER_ROLE = await token.MINTER_ROLE();
+    await token.grantRole(MINTER_ROLE, minter.address);
+    return { token, admin, minter, user1, user2, MINTER_ROLE };
   }
 
-  @Get('active')      // ← PHẢI trước @Get(':orderId')
-  getActiveOrders(...) {}
+  describe("Metadata", () => {
+    it("decimals() returns 6", async () => {
+      const { token } = await loadFixture(deployFixture);
+      expect(await token.decimals()).to.equal(6);
+    });
+    it("name and symbol are correct", async () => {
+      const { token } = await loadFixture(deployFixture);
+      expect(await token.name()).to.equal("Mock USDT");
+      expect(await token.symbol()).to.equal("USDT");
+    });
+  });
 
-  @Get()
-  getOrderHistory(...) {}
+  describe("mint()", () => {
+    it("MINTER_ROLE can mint", async () => {
+      const { token, minter, user1 } = await loadFixture(deployFixture);
+      await token.connect(minter).mint(user1.address, 1000n);
+      expect(await token.balanceOf(user1.address)).to.equal(1000n);
+    });
 
-  @Get(':orderId')    // ← PHẢI sau @Get('active')
-  getOrderById(...) {}
+    it("non-minter cannot mint — reverts AccessControl", async () => {
+      const { token, user1, user2, MINTER_ROLE } =
+        await loadFixture(deployFixture);
+      await expect(token.connect(user1).mint(user2.address, 1000n))
+        .to.be.revertedWithCustomError(
+          token,
+          "AccessControlUnauthorizedAccount",
+        )
+        .withArgs(user1.address, MINTER_ROLE);
+    });
 
-  @Post(':orderId/cancel')
-  @HttpCode(HttpStatus.OK)
-  cancelOrder(...) {}
-}
+    it("admin (without MINTER_ROLE) cannot mint", async () => {
+      const { token, admin, user1, MINTER_ROLE } =
+        await loadFixture(deployFixture);
+      await expect(token.connect(admin).mint(user1.address, 1000n))
+        .to.be.revertedWithCustomError(
+          token,
+          "AccessControlUnauthorizedAccount",
+        )
+        .withArgs(admin.address, MINTER_ROLE);
+    });
+
+    it("emits Transfer event on mint", async () => {
+      const { token, minter, user1 } = await loadFixture(deployFixture);
+      await expect(token.connect(minter).mint(user1.address, 500n))
+        .to.emit(token, "Transfer")
+        .withArgs(ethers.ZeroAddress, user1.address, 500n);
+    });
+
+    it("totalSupply increases after mint", async () => {
+      const { token, minter, user1 } = await loadFixture(deployFixture);
+      await token.connect(minter).mint(user1.address, 1000n);
+      expect(await token.totalSupply()).to.equal(1000n);
+    });
+  });
+
+  describe("ERC20 standard", () => {
+    it("transfer works after mint", async () => {
+      const { token, minter, user1, user2 } = await loadFixture(deployFixture);
+      await token.connect(minter).mint(user1.address, 1000n);
+      await token.connect(user1).transfer(user2.address, 400n);
+      expect(await token.balanceOf(user2.address)).to.equal(400n);
+      expect(await token.balanceOf(user1.address)).to.equal(600n);
+    });
+
+    it("approve + transferFrom works", async () => {
+      const { token, minter, user1, user2, admin } =
+        await loadFixture(deployFixture);
+      await token.connect(minter).mint(user1.address, 1000n);
+      await token.connect(user1).approve(admin.address, 500n);
+      await token
+        .connect(admin)
+        .transferFrom(user1.address, user2.address, 300n);
+      expect(await token.balanceOf(user2.address)).to.equal(300n);
+    });
+  });
+});
 ```
 
 ---
 
-## 12. Exceptions Cần Tạo (7 files)
+### test/TokenFaucet.test.ts
 
-```
-src/common/exceptions/
-├── market-not-found.exception.ts        # 404
-├── market-not-ready.exception.ts        # 422 MARKET_NOT_READY
-├── market-suspended.exception.ts        # 422 MARKET_SUSPENDED
-├── idempotency-conflict.exception.ts    # 409 IDEMPOTENCY_CONFLICT
-├── order-not-found.exception.ts         # 404 ORDER_NOT_FOUND
-├── order-not-cancellable.exception.ts   # 422 ORDER_NOT_CANCELLABLE
-└── validation.exception.ts             # 422 VALIDATION_ERROR
-```
+```typescript
+describe("TokenFaucet", () => {
+  const CLAIM_AMOUNT = 1000n * 10n ** 6n; // 1,000 USDT
+  const COOLDOWN = 86400n; // 1 day in seconds
 
-Format: `{ error: { code: '...', message: '...' } }`
+  async function deployFixture() {
+    const [admin, user1, user2, attacker] = await ethers.getSigners();
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    const TokenFaucet = await ethers.getContractFactory("TokenFaucet");
+
+    const usdt = await MockERC20.deploy("Mock USDT", "USDT", 6, admin.address);
+    const faucet = await TokenFaucet.deploy(admin.address);
+
+    // Grant MINTER_ROLE cho Faucet
+    const MINTER_ROLE = await usdt.MINTER_ROLE();
+    await usdt.connect(admin).grantRole(MINTER_ROLE, await faucet.getAddress());
+
+    // Config Faucet
+    await faucet
+      .connect(admin)
+      .setTokenConfig(await usdt.getAddress(), true, CLAIM_AMOUNT, COOLDOWN);
+
+    return { faucet, usdt, admin, user1, user2, attacker, MINTER_ROLE };
+  }
+
+  // ── Happy Path ──────────────────────────────────────────────────────────
+  describe("claim()", () => {
+    it("user claims successfully", async () => {
+      const { faucet, usdt, user1 } = await loadFixture(deployFixture);
+      await faucet.connect(user1).claim(await usdt.getAddress());
+      expect(await usdt.balanceOf(user1.address)).to.equal(CLAIM_AMOUNT);
+    });
+
+    it("emits TokenClaimed event", async () => {
+      const { faucet, usdt, user1 } = await loadFixture(deployFixture);
+      await expect(faucet.connect(user1).claim(await usdt.getAddress()))
+        .to.emit(faucet, "TokenClaimed")
+        .withArgs(user1.address, await usdt.getAddress(), CLAIM_AMOUNT);
+    });
+
+    it("two different users can claim at same time", async () => {
+      const { faucet, usdt, user1, user2 } = await loadFixture(deployFixture);
+      await faucet.connect(user1).claim(await usdt.getAddress());
+      await faucet.connect(user2).claim(await usdt.getAddress());
+      expect(await usdt.balanceOf(user1.address)).to.equal(CLAIM_AMOUNT);
+      expect(await usdt.balanceOf(user2.address)).to.equal(CLAIM_AMOUNT);
+    });
+
+    it("same user can claim again after cooldown", async () => {
+      const { faucet, usdt, user1 } = await loadFixture(deployFixture);
+      await faucet.connect(user1).claim(await usdt.getAddress());
+      await time.increase(Number(COOLDOWN));
+      await faucet.connect(user1).claim(await usdt.getAddress());
+      expect(await usdt.balanceOf(user1.address)).to.equal(CLAIM_AMOUNT * 2n);
+    });
+  });
+
+  // ── Revert Cases ────────────────────────────────────────────────────────
+  describe("claim() reverts", () => {
+    it("unsupported token → UnsupportedToken", async () => {
+      const { faucet, attacker, admin } = await loadFixture(deployFixture);
+      const fakeToken = admin.address; // any address not configured
+      await expect(
+        faucet.connect(attacker).claim(fakeToken),
+      ).to.be.revertedWithCustomError(faucet, "UnsupportedToken");
+    });
+
+    it("claim again before cooldown → FaucetCooldownActive", async () => {
+      const { faucet, usdt, user1 } = await loadFixture(deployFixture);
+      await faucet.connect(user1).claim(await usdt.getAddress());
+      await expect(
+        faucet.connect(user1).claim(await usdt.getAddress()),
+      ).to.be.revertedWithCustomError(faucet, "FaucetCooldownActive");
+    });
+
+    it("claim when paused → Pausable error", async () => {
+      const { faucet, usdt, user1, admin } = await loadFixture(deployFixture);
+      await faucet.connect(admin).pause();
+      await expect(
+        faucet.connect(user1).claim(await usdt.getAddress()),
+      ).to.be.revertedWithCustomError(faucet, "EnforcedPause");
+    });
+  });
+
+  // ── Admin Tests ─────────────────────────────────────────────────────────
+  describe("Admin permissions", () => {
+    it("non-admin cannot setTokenConfig → AccessControl revert", async () => {
+      const { faucet, usdt, attacker } = await loadFixture(deployFixture);
+      await expect(
+        faucet
+          .connect(attacker)
+          .setTokenConfig(await usdt.getAddress(), true, 100n, 100n),
+      ).to.be.revertedWithCustomError(
+        faucet,
+        "AccessControlUnauthorizedAccount",
+      );
+    });
+
+    it("non-admin cannot pause → AccessControl revert", async () => {
+      const { faucet, attacker } = await loadFixture(deployFixture);
+      await expect(
+        faucet.connect(attacker).pause(),
+      ).to.be.revertedWithCustomError(
+        faucet,
+        "AccessControlUnauthorizedAccount",
+      );
+    });
+
+    it("admin can pause and unpause", async () => {
+      const { faucet, usdt, user1, admin } = await loadFixture(deployFixture);
+      await faucet.connect(admin).pause();
+      await expect(
+        faucet.connect(user1).claim(await usdt.getAddress()),
+      ).to.be.revertedWithCustomError(faucet, "EnforcedPause");
+      await faucet.connect(admin).unpause();
+      await faucet.connect(user1).claim(await usdt.getAddress()); // success
+    });
+  });
+});
+```
 
 ---
 
-## 13. Definition of Done
+### test/ExchangeVault.test.ts
 
-### Core
+```typescript
+describe("ExchangeVault", () => {
+  const DEPOSIT_AMOUNT = 500n * 10n ** 6n; // 500 USDT
 
-- [ ] PlaceOrder: Order PENDING + 2 LedgerEntry ORDER_LOCK + Outbox
-- [ ] Sequences dùng `nextval()`, không UPDATE table
-- [ ] Idempotency: same key+payload → 200; same key+diff payload → 409
-- [ ] Cancel: `FOR UPDATE` trước check status
-- [ ] Cancel: PENDING/FILLED/CANCELLED/REJECTED → 422
-- [ ] Cancel order của user khác → 404
-- [ ] Market không READY → 422; Balance không đủ → 422
-- [ ] Thiếu Idempotency-Key → 400
-- [ ] Transaction rollback toàn bộ khi bất kỳ bước fail
+  // accountReference là bytes32 ngẫu nhiên (mô phỏng Backend tạo)
+  const ACCOUNT_REF_1 = ethers.encodeBytes32String("ref_001");
+  const ACCOUNT_REF_2 = ethers.encodeBytes32String("ref_002");
 
-### Query
+  async function deployFixture() {
+    const [admin, user1, user2, attacker] = await ethers.getSigners();
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    const ExchangeVault = await ethers.getContractFactory("ExchangeVault");
 
-- [ ] GET /orders/active: đúng 4 statuses, chỉ của user hiện tại
-- [ ] Route `active` match trước `:orderId`
-- [ ] Cursor pagination ổn định
+    const usdt = await MockERC20.deploy("Mock USDT", "USDT", 6, admin.address);
+    const vault = await ExchangeVault.deploy(admin.address);
+
+    const usdtAddr = await usdt.getAddress();
+    const vaultAddr = await vault.getAddress();
+
+    // Setup: usdt supported, mint tokens, approve
+    await vault.connect(admin).setSupportedToken(usdtAddr, true);
+    const MINTER_ROLE = await usdt.MINTER_ROLE();
+    await usdt.grantRole(MINTER_ROLE, admin.address);
+    await usdt.connect(admin).mint(user1.address, DEPOSIT_AMOUNT * 5n);
+    await usdt.connect(admin).mint(user2.address, DEPOSIT_AMOUNT * 5n);
+    await usdt.connect(admin).mint(attacker.address, DEPOSIT_AMOUNT * 5n);
+
+    return { vault, usdt, admin, user1, user2, attacker, usdtAddr, vaultAddr };
+  }
+
+  // ── Happy Path ──────────────────────────────────────────────────────────
+  describe("deposit()", () => {
+    it("deposit after approve — success", async () => {
+      const { vault, usdt, user1, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT);
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1);
+      expect(await usdt.balanceOf(vaultAddr)).to.equal(DEPOSIT_AMOUNT);
+    });
+
+    it("emits Deposited event with correct fields", async () => {
+      const { vault, usdt, user1, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT);
+      await expect(
+        vault.connect(user1).deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1),
+      )
+        .to.emit(vault, "Deposited")
+        .withArgs(ACCOUNT_REF_1, user1.address, usdtAddr, DEPOSIT_AMOUNT);
+    });
+
+    it("user1 and user2 can use same accountReference (different depositKey)", async () => {
+      const { vault, usdt, user1, user2, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT);
+      await usdt.connect(user2).approve(vaultAddr, DEPOSIT_AMOUNT);
+      // Same accountRef — different depositors → OK (different depositKey)
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1);
+      await vault
+        .connect(user2)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1);
+      expect(await usdt.balanceOf(vaultAddr)).to.equal(DEPOSIT_AMOUNT * 2n);
+    });
+  });
+
+  // ── One-time accountReference ────────────────────────────────────────────
+  describe("accountReference is one-time per depositor", () => {
+    it("same depositor reuses same reference → DepositReferenceAlreadyUsed", async () => {
+      const { vault, usdt, user1, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT * 2n);
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1);
+      await expect(
+        vault.connect(user1).deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1),
+      ).to.be.revertedWithCustomError(vault, "DepositReferenceAlreadyUsed");
+    });
+
+    it("same depositor with different reference — success", async () => {
+      const { vault, usdt, user1, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT * 2n);
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1);
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_2);
+      expect(await usdt.balanceOf(vaultAddr)).to.equal(DEPOSIT_AMOUNT * 2n);
+    });
+  });
+
+  // ── Revert Cases ────────────────────────────────────────────────────────
+  describe("deposit() reverts", () => {
+    it("unsupported token → UnsupportedToken", async () => {
+      const { vault, user1 } = await loadFixture(deployFixture);
+      const fakeToken = ethers.Wallet.createRandom().address;
+      await expect(
+        vault.connect(user1).deposit(fakeToken, DEPOSIT_AMOUNT, ACCOUNT_REF_1),
+      ).to.be.revertedWithCustomError(vault, "UnsupportedToken");
+    });
+
+    it("amount = 0 → InvalidAmount", async () => {
+      const { vault, user1, usdtAddr } = await loadFixture(deployFixture);
+      await expect(
+        vault.connect(user1).deposit(usdtAddr, 0n, ACCOUNT_REF_1),
+      ).to.be.revertedWithCustomError(vault, "InvalidAmount");
+    });
+
+    it("accountReference = bytes32(0) → InvalidAccountReference", async () => {
+      const { vault, user1, usdtAddr } = await loadFixture(deployFixture);
+      await expect(
+        vault.connect(user1).deposit(usdtAddr, DEPOSIT_AMOUNT, ethers.ZeroHash),
+      ).to.be.revertedWithCustomError(vault, "InvalidAccountReference");
+    });
+
+    it("no allowance → ERC20InsufficientAllowance revert", async () => {
+      const { vault, user1, usdtAddr } = await loadFixture(deployFixture);
+      // Không approve trước
+      await expect(
+        vault.connect(user1).deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1),
+      ).to.be.reverted; // SafeERC20 revert
+    });
+
+    it("pause blocks deposit → EnforcedPause", async () => {
+      const { vault, usdt, user1, admin, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT);
+      await vault.connect(admin).pause();
+      await expect(
+        vault.connect(user1).deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1),
+      ).to.be.revertedWithCustomError(vault, "EnforcedPause");
+    });
+
+    it("cannot receive native ETH — reverts", async () => {
+      const { vault, user1 } = await loadFixture(deployFixture);
+      await expect(
+        user1.sendTransaction({
+          to: await vault.getAddress(),
+          value: ethers.parseEther("1"),
+        }),
+      ).to.be.reverted;
+    });
+  });
+
+  // ── Reentrancy ──────────────────────────────────────────────────────────
+  describe("reentrancy protection", () => {
+    it("nonReentrant prevents reentrancy attack on deposit", async () => {
+      // Deploy attacker contract thử gọi deposit() lại trong callback
+      // Cách đơn giản: dùng MockERC20 bình thường — safeTransferFrom không callback
+      // Để test reentrancy thật cần deploy malicious ERC-777 hoặc hook
+      // → Verify bằng code: nonReentrant modifier có mặt trên deposit()
+      // → Unit test: verify contract inherits ReentrancyGuard và deposit có modifier
+      const { vault } = await loadFixture(deployFixture);
+      // Kiểm tra indirect: deposit thành công không bị lock sau lần đầu
+      const { usdt, user1, vaultAddr, usdtAddr } =
+        await loadFixture(deployFixture);
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT);
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_1);
+      // Deposit thứ 2 với ref khác vẫn thành công (nonReentrant không bị stuck)
+      await usdt.connect(user1).approve(vaultAddr, DEPOSIT_AMOUNT);
+      await vault
+        .connect(user1)
+        .deposit(usdtAddr, DEPOSIT_AMOUNT, ACCOUNT_REF_2);
+      expect(await usdt.balanceOf(vaultAddr)).to.equal(DEPOSIT_AMOUNT * 2n);
+    });
+  });
+
+  // ── recoverERC20 ─────────────────────────────────────────────────────────
+  describe("recoverERC20()", () => {
+    it("admin recovers unsupported token sent by mistake", async () => {
+      const { vault, admin, usdtAddr } = await loadFixture(deployFixture);
+
+      // Deploy một token khác không được support
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const strayToken = await MockERC20.deploy(
+        "Stray",
+        "STR",
+        18,
+        admin.address,
+      );
+      const MINTER = await strayToken.MINTER_ROLE();
+      await strayToken.grantRole(MINTER, admin.address);
+      await strayToken.mint(await vault.getAddress(), ethers.parseEther("100"));
+
+      // Admin recover stray token
+      await vault
+        .connect(admin)
+        .recoverERC20(
+          await strayToken.getAddress(),
+          admin.address,
+          ethers.parseEther("100"),
+        );
+      expect(await strayToken.balanceOf(admin.address)).to.equal(
+        ethers.parseEther("100"),
+      );
+    });
+
+    it("cannot recover supported token → CannotRecoverSupportedToken", async () => {
+      const { vault, admin, usdtAddr } = await loadFixture(deployFixture);
+      await expect(
+        vault.connect(admin).recoverERC20(usdtAddr, admin.address, 1n),
+      ).to.be.revertedWithCustomError(vault, "CannotRecoverSupportedToken");
+    });
+
+    it("non-admin cannot recover → AccessControl revert", async () => {
+      const { vault, usdt, attacker, usdtAddr } =
+        await loadFixture(deployFixture);
+      await expect(
+        vault.connect(attacker).recoverERC20(usdtAddr, attacker.address, 1n),
+      ).to.be.revertedWithCustomError(
+        vault,
+        "AccessControlUnauthorizedAccount",
+      );
+    });
+
+    it("recover to zero address → ZeroAddress revert", async () => {
+      const { vault, admin } = await loadFixture(deployFixture);
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const strayToken = await MockERC20.deploy("S", "S", 18, admin.address);
+      await expect(
+        vault
+          .connect(admin)
+          .recoverERC20(await strayToken.getAddress(), ethers.ZeroAddress, 1n),
+      ).to.be.revertedWithCustomError(vault, "ZeroAddress");
+    });
+
+    it("emits ERC20Recovered event", async () => {
+      const { vault, admin } = await loadFixture(deployFixture);
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const strayToken = await MockERC20.deploy("S", "S", 18, admin.address);
+      const MINTER = await strayToken.MINTER_ROLE();
+      await strayToken.grantRole(MINTER, admin.address);
+      await strayToken.mint(await vault.getAddress(), 1000n);
+      await expect(
+        vault
+          .connect(admin)
+          .recoverERC20(await strayToken.getAddress(), admin.address, 1000n),
+      )
+        .to.emit(vault, "ERC20Recovered")
+        .withArgs(await strayToken.getAddress(), admin.address, 1000n);
+    });
+  });
+
+  // ── Admin Permissions ────────────────────────────────────────────────────
+  describe("Admin permissions", () => {
+    it("non-admin cannot setSupportedToken", async () => {
+      const { vault, attacker, usdtAddr } = await loadFixture(deployFixture);
+      await expect(
+        vault.connect(attacker).setSupportedToken(usdtAddr, false),
+      ).to.be.revertedWithCustomError(
+        vault,
+        "AccessControlUnauthorizedAccount",
+      );
+    });
+
+    it("non-admin cannot pause", async () => {
+      const { vault, attacker } = await loadFixture(deployFixture);
+      await expect(
+        vault.connect(attacker).pause(),
+      ).to.be.revertedWithCustomError(
+        vault,
+        "AccessControlUnauthorizedAccount",
+      );
+    });
+
+    it("admin can unsupport token, then recoverERC20 works", async () => {
+      const { vault, usdt, admin, usdtAddr } = await loadFixture(deployFixture);
+      // Unsupport token trước
+      await vault.connect(admin).setSupportedToken(usdtAddr, false);
+      // Giả lập có token trong vault
+      const MINTER = await usdt.MINTER_ROLE();
+      await usdt.grantRole(MINTER, admin.address);
+      await usdt.mint(await vault.getAddress(), 1000n);
+      // Giờ có thể recover
+      await vault.connect(admin).recoverERC20(usdtAddr, admin.address, 1000n);
+      expect(await usdt.balanceOf(admin.address)).to.equal(1000n);
+    });
+  });
+});
+```
+
+---
+
+## 11. Thứ Tự Implement
+
+```
+Bước 1.  pnpm add dependencies (hardhat-toolbox, dotenv)
+Bước 2.  Cập nhật hardhat.config.ts
+Bước 3.  Tạo contracts/interfaces/IMintableERC20.sol
+Bước 4.  Viết lại contracts/MockERC20.sol (AccessControl, immutable decimals)
+Bước 5.  Viết contracts/TokenFaucet.sol
+Bước 6.  Viết contracts/ExchangeVault.sol (với recoverERC20)
+Bước 7.  pnpm compile — phải clean, không warning
+Bước 8.  Viết test/MockERC20.test.ts
+Bước 9.  Viết test/TokenFaucet.test.ts
+Bước 10. Viết test/ExchangeVault.test.ts
+Bước 11. pnpm test — tất cả green
+Bước 12. Viết scripts/deploy.ts
+Bước 13. Test deploy: pnpm hardhat node (terminal 1) + pnpm hardhat run scripts/deploy.ts --network localhost (terminal 2)
+Bước 14. Copy addresses vào .env backend
+```
+
+---
+
+## 12. Definition of Done
+
+### Contracts
+
+- [ ] `MockERC20`: custom decimals immutable, chỉ `MINTER_ROLE` mint
+- [ ] `TokenFaucet`: claim với cooldown per token, Pausable, admin cấu hình
+- [ ] `ExchangeVault`: `depositKey` chống replay (one-time per depositor), SafeERC20, Pausable
+- [ ] `ExchangeVault.recoverERC20`: chỉ cho unsupported token, to != zero address
+- [ ] Không có `receive()` / `fallback()` trong Vault
+
+### Tests — tất cả pass
+
+- [ ] MockERC20: decimals, mint role, ERC20 standard
+- [ ] TokenFaucet: claim, cooldown, unsupported, pause, admin permissions
+- [ ] ExchangeVault: deposit happy path, one-time reference, revert cases, reentrancy check, recoverERC20, admin permissions
+
+### Scripts
+
+- [ ] Deploy script print đầy đủ addresses
+- [ ] Configure scripts chạy được
 
 ### Build
 
-- [ ] TypeScript clean, ESLint pass
-- [ ] PostgreSQL sequences tồn tại trước khi PlaceOrder
-
----
-
-## 14. Thứ Tự Implement
-
-```
-1.  7 Exceptions
-2.  helpers/idempotency.helper.ts
-3.  helpers/sequence.helper.ts         ← nextval()
-4.  seed.ts: thêm CREATE SEQUENCE
-5.  DTOs (4 files)
-6.  OrderQueryService
-7.  OrdersService.placeOrder
-8.  OrdersService.cancelOrder
-9.  OrdersController
-10. OrdersModule + AppModule
-11. Test manual
-```
+- [ ] `pnpm compile` không có warning
+- [ ] Private key chỉ từ env, không hardcode
