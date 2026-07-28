@@ -6,5 +6,7 @@ allowBuilds:
   "@prisma/engines": true
   bcrypt: true
   esbuild: true
+  keccak: true
   prisma: true
+  secp256k1: true
   unrs-resolver: true

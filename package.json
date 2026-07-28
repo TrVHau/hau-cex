@@ -25,7 +25,7 @@
     "contracts:compile": "pnpm --filter @hau-cex/contracts compile",
     "contracts:test": "pnpm --filter @hau-cex/contracts test",
     "contracts:node": "pnpm --filter @hau-cex/contracts node",
-    "contracts:clean": "pnpm --filter @hau-cex/contracts clean",
+    "contracts:clean": "pnpm --filter @hau-cex/contracts run clean",
     "db:validate": "pnpm --filter @hau-cex/backend db:validate",
     "db:generate": "pnpm --filter @hau-cex/backend db:generate",
     "db:seed": "pnpm --filter @hau-cex/backend db:seed",

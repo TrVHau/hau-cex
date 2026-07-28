@@ -1,11 +1,8 @@
 import type { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
-import { config as dotenvConfig } from "dotenv";
-import { resolve } from "path";
-
-dotenvConfig({ path: resolve(__dirname, "../.env") });
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 
 const config: HardhatUserConfig = {
+  plugins: [hardhatEthers],
   solidity: {
     version: "0.8.28",
     settings: {
@@ -20,9 +17,10 @@ const config: HardhatUserConfig = {
       type: "edr-simulated",
       chainId: 31337,
     },
-    sepolia: {
+    localhost: {
       type: "http",
-      url: process.env.SEPOLIA_RPC_URL || "",
+      url: "http://127.0.0.1:8545",
+      chainId: 31337,
     },
   },
 };
