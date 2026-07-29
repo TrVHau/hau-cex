@@ -123,6 +123,15 @@ async function main() {
     },
   });
 
+  const safeId = pair.id.replace(/-/g, '_');
+  await prisma.$executeRawUnsafe(`
+    CREATE SEQUENCE IF NOT EXISTS order_seq_${safeId} START 1;
+    CREATE SEQUENCE IF NOT EXISTS cmd_seq_${safeId} START 1;
+  `);
+  console.log(
+    `Created sequences for trading pair ${pair.symbol}: order_seq_${safeId}, cmd_seq_${safeId}`,
+  );
+
   await prisma.orderSequence.upsert({
     where: { tradingPairId: pair.id },
     update: {},
