@@ -13,8 +13,8 @@ export type OrderResponseDto = {
   remainingQuantity: string;
   lockedAmount: string;
   remainingLockedAmount: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type OrderListResponseDto = {
