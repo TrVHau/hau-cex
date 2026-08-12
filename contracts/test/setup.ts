@@ -1,9 +1,13 @@
 /**
- * Mocha Root Hook — Setup Hardhat Runtime Environment cho tests.
+ * test/setup.ts — Mocha root hook: khởi tạo Hardhat Runtime Environment
  *
- * Hardhat 3 thay đổi kiến trúc: ethers nằm trong hre.network.connect().ethers
- * File này khởi tạo HRE + network connection, expose qua global.
+ * Hardhat 3 không auto-inject hre khi dùng mocha trực tiếp.
+ * File này tạo HRE + network connection, lưu vào globalThis.
+ *
+ * Cách dùng:
+ *   mocha --require tsx/esm --file test/setup.ts 'test/**\/*.test.ts'
  */
+
 
 import {
   createHardhatRuntimeEnvironment,
@@ -12,9 +16,10 @@ import {
 } from "hardhat/hre";
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 
+
 export const mochaHooks = {
   async beforeAll(this: Mocha.Context) {
-    this.timeout(60000);
+    this.timeout(120_000);
 
     const configPath = await resolveHardhatConfigPath();
     const userConfig = await importUserConfig(configPath);
@@ -25,12 +30,12 @@ export const mochaHooks = {
       configPath,
     );
 
+    // Hardhat 3: ethers nằm ở hre.network.connect().ethers
     const conn = await hre.network.connect();
 
-    // Expose globally để test files import được
-    (globalThis as any).__hre = hre;
+    (globalThis as any).__hre    = hre;
     (globalThis as any).__ethers = conn.ethers;
-    (globalThis as any).__conn = conn;
+    (globalThis as any).__conn   = conn;
   },
 
   async afterAll() {

@@ -2,14 +2,11 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "module": "node20",
+    "moduleResolution": "bundler",
     "types": ["node", "mocha"],
     "verbatimModuleSyntax": false,
     "noEmit": true
   },
-  "include": [
-    "hardhat.config.ts",
-    "scripts/**/*.ts",
-    "test/**/*.ts"
-  ],
+  "include": ["hardhat.config.ts", "scripts/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "artifacts", "cache"]
 }
