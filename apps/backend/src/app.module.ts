@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { WalletsModule } from './modules/wallets/wallets.module';
+import { OrdersModule } from './modules/orders/orders.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
     PrismaModule,
     AuthModule,
     WalletsModule,
+    OrdersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

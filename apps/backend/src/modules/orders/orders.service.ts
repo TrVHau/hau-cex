@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { WalletService } from '../wallets/wallets.service';
+import { WalletsService } from '../wallets/wallets.service';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderStatus, Prisma, TradingPairStatus } from '../../generated/prisma';
@@ -27,7 +27,7 @@ export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
   constructor(
     private readonly PrismaService: PrismaService,
-    private readonly WalletService: WalletService,
+    private readonly WalletsService: WalletsService,
     private readonly WalletBalanceService: WalletBalanceService,
   ) {}
   // đặt lệnh
@@ -97,7 +97,7 @@ export class OrdersService {
         const lockedAmount = isBuy ? price.mul(quantity) : quantity;
 
         // lock wallet balance
-        const wallet = await this.WalletService.findWalletByAssetId(
+        const wallet = await this.WalletsService.findWalletByAssetId(
           userId,
           lockedAssetId,
         );
