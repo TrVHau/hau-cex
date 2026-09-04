@@ -31,7 +31,7 @@ export class OrdersController {
 
   @Post()
   async placeOrder(
-    @Headers('idempotency-Key') key: string,
+    @Headers('idempotency-key') key: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateOrderDto,
   ) {

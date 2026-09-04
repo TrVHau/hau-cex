@@ -8,7 +8,12 @@ import {
 } from './dto/order-response.dto';
 import { OrderType } from '../../common/enums/order-type.enum';
 import { OrderListQueryDto } from './dto/order-list-query.dto';
-import { encodeCursor } from '../../common/helpers/cursor.helper';
+import { encodeCursor, decodeCursor } from '../../common/helpers/cursor.helper';
+
+// ─── Kiểu Prisma inferred cho Order kèm tradingPair ────────────────────────
+type OrderWithPair = Prisma.OrderGetPayload<{
+  include: { tradingPair: { select: { symbol: true } } };
+}>;
 
 @Injectable()
 export class OrderQueryService {
@@ -76,7 +81,7 @@ export class OrderQueryService {
 
     const hasMore = rows.length > limit;
     if (hasMore) {
-      rows.pop(); // remove the extra row used to check for more
+      rows.pop(); // xóa row thừa dùng để check hasMore
     }
 
     return {
@@ -104,24 +109,23 @@ export class OrderQueryService {
     return this.toResponseDto(order);
   }
 
-  // HÀM MAPPER
-  private toResponseDto(order: any): OrderResponseDto {
+  // ─── Mapper ───────────────────────────────────────────────────────────────
+  private toResponseDto(order: OrderWithPair): OrderResponseDto {
+    // Decimal.toFixed(18) rồi trim trailing zeros để response gọn gàng
+    const fmt = (d: Prisma.Decimal) => d.toFixed(18).replace(/\.?0+$/, '');
+
     return {
       orderId: order.id,
       symbol: order.tradingPair.symbol,
       side: order.side,
       type: OrderType.LIMIT,
       status: order.status,
-      price: order.price.toFixed(18).replace(/\.?0+$/, ''),
-      quantity: order.quantity.toFixed(18).replace(/\.?0+$/, ''),
-      filledQuantity: order.filledQuantity.toFixed(18).replace(/\.?0+$/, ''),
-      remainingQuantity: order.remainingQuantity
-        .toFixed(18)
-        .replace(/\.?0+$/, ''),
-      lockedAmount: order.lockedAmount.toFixed(18).replace(/\.?0+$/, ''),
-      remainingLockedAmount: order.remainingLockedAmount
-        .toFixed(18)
-        .replace(/\.?0+$/, ''),
+      price: fmt(order.price),
+      quantity: fmt(order.quantity),
+      filledQuantity: fmt(order.filledQuantity),
+      remainingQuantity: fmt(order.remainingQuantity),
+      lockedAmount: fmt(order.lockedAmount),
+      remainingLockedAmount: fmt(order.remainingLockedAmount),
       createdAt: order.createdAt.toISOString(),
       updatedAt: order.updatedAt.toISOString(),
     };

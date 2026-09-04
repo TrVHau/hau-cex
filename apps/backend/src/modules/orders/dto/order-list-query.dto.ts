@@ -10,6 +10,7 @@ import {
 
 export class OrderListQueryDto {
   @IsString()
+  @IsOptional()
   @IsNotEmpty()
   symbol?: string;
 

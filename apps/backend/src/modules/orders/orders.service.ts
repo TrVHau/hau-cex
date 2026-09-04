@@ -26,9 +26,9 @@ import { PrismaTx } from '../../common/types/prisma-tx.type';
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
   constructor(
-    private readonly PrismaService: PrismaService,
-    private readonly WalletsService: WalletsService,
-    private readonly WalletBalanceService: WalletBalanceService,
+    private readonly prismaService: PrismaService,
+    private readonly walletsService: WalletsService,
+    private readonly walletBalanceService: WalletBalanceService,
   ) {}
   // đặt lệnh
   async placeOrder(
@@ -38,7 +38,7 @@ export class OrdersService {
   ) {
     const orderId = uuidv7();
 
-    return this.PrismaService.$transaction(
+    return this.prismaService.$transaction(
       async (tx) => {
         // check idempotency key
         const existing = await tx.order.findUnique({
@@ -97,11 +97,11 @@ export class OrdersService {
         const lockedAmount = isBuy ? price.mul(quantity) : quantity;
 
         // lock wallet balance
-        const wallet = await this.WalletsService.findWalletByAssetId(
+        const wallet = await this.walletsService.findWalletByAssetId(
           userId,
           lockedAssetId,
         );
-        await this.WalletBalanceService.moveAvailableToLocked(tx, {
+        await this.walletBalanceService.moveAvailableToLocked(tx, {
           walletId: wallet.id,
           amount: lockedAmount,
           operationId: orderId,
@@ -170,7 +170,7 @@ export class OrdersService {
   }
 
   async cancelOrder(userId: string, orderId: string) {
-    return this.PrismaService.$transaction(async (tx: PrismaTx) => {
+    return this.prismaService.$transaction(async (tx: PrismaTx) => {
       // lockrow to prevent race settle race condition
       const rows = await tx.$queryRaw<
         {
@@ -187,8 +187,9 @@ export class OrdersService {
       if (!order || order.user_id !== userId)
         throw new OrderNotFoundException();
 
-      // validate stat
+      // validate status — PENDING đã được gửi outbox nhưng chưa được engine xác nhận
       const cancellableStatuses: OrderStatus[] = [
+        OrderStatus.PENDING,
         OrderStatus.OPEN,
         OrderStatus.PARTIALLY_FILLED,
       ];
