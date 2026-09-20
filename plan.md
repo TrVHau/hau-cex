@@ -1,436 +1,980 @@
-# Phase 5 — Order API & Outbox (Revised)
+# Phase 6 — Engine Messaging (Chi Tiết)
 
-> **3 vấn đề đã sửa so với v1:**
->
-> 1. Sequence bottleneck → PostgreSQL SEQUENCE `nextval()` thay vì UPDATE table
-> 2. Race condition cancel → `SELECT FOR UPDATE` trước khi check status
-> 3. Fee model clarification — buyer fee từ Base, không cần include fee vào lock
-> 4. Idempotency trade-off ghi nhận
+## Mục tiêu
 
----
-
-## 1. Mục Tiêu
-
-Backend tạo Order, lock balance và ghi Outbox trong một PostgreSQL transaction atomic.
-Order nằm ở `PENDING` đến khi Phase 6 (Engine Messaging) hoàn thiện.
-
----
-
-## 2. Scope
-
-**Thuộc Phase này:** `POST /orders`, `GET /orders/active`, `GET /orders`, `GET /orders/:orderId`, `POST /orders/:orderId/cancel`
-
-**Không thuộc Phase này:** Engine nhận Outbox (P6), Settlement (P7), Unlock khi cancel (P8)
-
----
-
-## 3. Cấu Trúc Thư Mục
+Kết nối Backend ↔ Go Matching Engine qua Redis Streams. Khi xong Phase 6:
 
 ```
-src/modules/orders/
-├── orders.module.ts
-├── orders.controller.ts
-├── orders.service.ts           # PlaceOrder + CancelOrder transactions
-├── order-query.service.ts      # Read-only queries
-├── dto/
-│   ├── create-order.dto.ts
-│   ├── order-response.dto.ts
-│   ├── order-list-query.dto.ts
-│   └── active-order-query.dto.ts
-└── types/
-    └── order-outbox.types.ts
+DB TradingPair SUSPENDED
+→ Outbox OpenMarket → Redis stream:engine:commands
+→ Go Engine consume → publish MarketOpened → stream:engine:events
+→ Backend Worker consume → DB TradingPair = READY
 
-src/common/helpers/
-├── idempotency.helper.ts       # SHA-256 payload hash
-└── sequence.helper.ts          # nextval() wrapper
+POST /orders (PENDING + Outbox PlaceOrder)
+→ Outbox → Redis stream:engine:commands
+→ Go Engine consume → publish OrderOpened
+→ Backend Worker consume → DB Order = OPEN
 ```
 
 ---
 
-## 4. Validation Rules
+## Phần A — Backend Worker: RedisModule
 
-```
-price > 0
-quantity > 0
-price % tickSize == 0
-quantity % stepSize == 0
-quantity >= minQuantity
-price * quantity >= minNotional
-type == 'LIMIT'   (MVP only)
-```
-
-**Bắt buộc dùng `Prisma.Decimal` — không dùng JS `number` cho bất kỳ phép toán tài chính nào.**
-
----
-
-## 5. Lock Amount — Fee Model (Clarification)
-
-Theo docs/05 §16: **Buyer fee thu bằng Base Asset, Seller fee thu bằng Quote Asset.**
-
-Fee KHÔNG lấy từ asset bị lock — lấy từ asset được nhận tại Settlement.
-
-```
-BUY  → lock Quote (USDT):  lockedAmount = price * quantity
-SELL → lock Base (BTC):    lockedAmount = quantity
-```
-
-Không cần cộng fee vào `lockedAmount`.
-
-> **Lưu ý Settlement (Phase 7):** Buyer không trừ `executionPrice * qty` mà trừ `limitPrice * qty` từ locked.
-> Phần chênh lệch `quoteRefund = (limitPrice - executionPrice) * qty` được hoàn về `available`.
-
----
-
-## 6. Idempotency
-
-**Header:** `Idempotency-Key: <UUID>` (client sinh, unique per request)
-
-**Payload hash** — canonicalize: `symbol|side|type|price.toFixed(18)|quantity.toFixed(18)`, hash SHA-256:
+### File: `src/core/redis/redis.module.ts`
 
 ```typescript
-// src/common/helpers/idempotency.helper.ts
-import { createHash } from "node:crypto";
-import { Prisma } from "../../generated/prisma";
-
-export function hashOrderPayload(
-  symbol: string,
-  side: string,
-  type: string,
-  price: Prisma.Decimal,
-  quantity: Prisma.Decimal,
-): string {
-  const raw = `${symbol}|${side}|${type}|${price.toFixed(18)}|${quantity.toFixed(18)}`;
-  return createHash("sha256").update(raw).digest("hex");
-}
+@Global()
+@Module({
+  providers: [
+    {
+      provide: "REDIS_CLIENT",
+      useFactory: () => new Redis(process.env.REDIS_URL),
+    },
+  ],
+  exports: ["REDIS_CLIENT"],
+})
+export class RedisModule {}
 ```
 
-**Logic check:**
-
-```
-findUnique(userId, idempotencyKey)
-  → null                → tạo mới
-  → exists + hash khớp  → return existing order (200, idempotent)
-  → exists + hash khác  → IdempotencyConflictException (409)
-```
-
-> **Trade-off MVP:** `idempotencyKey` lưu trong DB (đã có trong schema). Technical debt — production nên dùng Redis TTL 1h.
+- Dùng `ioredis` (cài: `pnpm add ioredis --filter backend`)
+- `@Global()` — inject được từ bất kỳ module nào
+- Đọc `REDIS_URL` từ env (`.env.example`: `REDIS_URL=redis://localhost:6379`)
 
 ---
 
-## 7. [FIX #1] Sequence — PostgreSQL SEQUENCE Objects
+## Phần B — Backend Worker: OpenMarketBootstrapService
 
-### Vấn đề của UPDATE table
+### File: `src/modules/engine/open-market-bootstrap.service.ts`
 
-```sql
-UPDATE order_sequences SET last_value = last_value + 1
-WHERE trading_pair_id = $1 RETURNING last_value
-```
-
-Row-level lock trong suốt duration của main transaction (~10-50ms) → 1000 concurrent requests serialize → timeout/deadlock.
-
-### Giải pháp: `nextval()`
-
-PostgreSQL SEQUENCE dùng **internal lightweight mutex**, không phải row lock, **không rollback** khi transaction abort.
-
-**Tạo sequences khi tạo TradingPair** (thêm vào `seed.ts` và Admin API Phase 10):
+**Khi worker start**, scan tất cả TradingPair status ≠ READY → tạo Outbox `OpenMarket` nếu chưa có.
 
 ```typescript
-const safeId = pair.id.replace(/-/g, "_"); // UUID chỉ có [0-9a-f-] → safe
-await prisma.$executeRawUnsafe(`
-  CREATE SEQUENCE IF NOT EXISTS "order_seq_${safeId}" START 1;
-  CREATE SEQUENCE IF NOT EXISTS "cmd_seq_${safeId}" START 1;
-`);
-```
+@Injectable()
+export class OpenMarketBootstrapService implements OnApplicationBootstrap {
+  async onApplicationBootstrap() {
+    // SELECT * FROM trading_pairs WHERE status != 'READY'
+    const pairs = await this.prisma.tradingPair.findMany({
+      where: { status: { not: TradingPairStatus.READY } },
+    });
 
-**sequence.helper.ts:**
+    for (const pair of pairs) {
+      // Check xem đã có Outbox OpenMarket chưa (idempotent)
+      const existing = await this.prisma.outboxEvent.findFirst({
+        where: {
+          messageType: "OpenMarket",
+          payload: { path: ["tradingPairId"], equals: pair.id },
+          status: { not: OutboxStatus.FAILED },
+        },
+      });
+      if (existing) continue;
 
-```typescript
-// src/common/helpers/sequence.helper.ts
-import { Prisma } from "../../generated/prisma";
-
-export async function nextOrderSequence(
-  tx: PrismaTx,
-  tradingPairId: string,
-): Promise<bigint> {
-  const seqName = `order_seq_${tradingPairId.replace(/-/g, "_")}`;
-  const rows = await tx.$queryRaw<[{ nextval: bigint }]>(
-    Prisma.sql`SELECT nextval(${seqName}::regclass) AS nextval`,
-  );
-  return rows[0].nextval;
-}
-
-export async function nextCommandSequence(
-  tx: PrismaTx,
-  tradingPairId: string,
-): Promise<bigint> {
-  const seqName = `cmd_seq_${tradingPairId.replace(/-/g, "_")}`;
-  const rows = await tx.$queryRaw<[{ nextval: bigint }]>(
-    Prisma.sql`SELECT nextval(${seqName}::regclass) AS nextval`,
-  );
-  return rows[0].nextval;
-}
-```
-
-Notes:
-
-- `Prisma.sql` parameterizes `seqName` → `$1` → safe, không SQL injection
-- `::regclass`: PostgreSQL resolve sequence name → OID, error nếu không tồn tại → fail fast
-- Sequence gap khi tx rollback → chấp nhận được (sequences không cần liên tục)
-- Bảng `order_sequences`, `engine_command_sequences` giữ nguyên trong schema nhưng không dùng nữa ở Phase 5+
-
----
-
-## 8. PlaceOrder Transaction (9 bước)
-
-```typescript
-async placeOrder(userId: string, idempotencyKey: string, dto: CreateOrderDto) {
-  const orderId = uuidv7()  // ← Generate TRƯỚC transaction, dùng làm operationId
-
-  return this.prisma.$transaction(async (tx) => {
-    // 1. Idempotency check
-    const existing = await tx.order.findUnique({
-      where: { userId_idempotencyKey: { userId, idempotencyKey } },
-    })
-    if (existing) {
-      const hash = hashOrderPayload(dto.symbol, dto.side, dto.type,
-        new Prisma.Decimal(dto.price), new Prisma.Decimal(dto.quantity))
-      if (existing.idempotencyPayloadHash === hash)
-        return { orderId: existing.id, status: existing.status }
-      throw new IdempotencyConflictException()
+      await this.prisma.outboxEvent.create({
+        data: {
+          messageId: uuidv7(),
+          version: 1,
+          correlationId: uuidv7(),
+          streamName: "stream:engine:commands",
+          messageType: "OpenMarket",
+          partitionKey: pair.id,
+          commandSequence: await nextCommandSequence(tx, pair.id),
+          occurredAt: new Date(),
+          payload: {
+            tradingPairId: pair.id,
+            market: pair.symbol,
+            baseAssetId: pair.baseAssetId,
+            quoteAssetId: pair.quoteAssetId,
+            pricePrecision: 18,
+            quantityPrecision: 18,
+            tickSize: pair.tickSize.toFixed(18),
+            stepSize: pair.stepSize.toFixed(18),
+            minQuantity: pair.minQuantity.toFixed(18),
+            minNotional: pair.minNotional.toFixed(18),
+            openedAt: new Date().toISOString(),
+          },
+        },
+      });
     }
-
-    // 2. Validate TradingPair
-    const pair = await tx.tradingPair.findUnique({ where: { symbol: dto.symbol } })
-    if (!pair) throw new MarketNotFoundException()
-    if (pair.status === TradingPairStatus.SUSPENDED) throw new MarketSuspendedException()
-    if (pair.status !== TradingPairStatus.READY) throw new MarketNotReadyException()
-
-    // 3. Validate tick / step / min
-    const price    = new Prisma.Decimal(dto.price)
-    const quantity = new Prisma.Decimal(dto.quantity)
-    if (price.lte(0))                               throw new ValidationException('price > 0')
-    if (quantity.lte(0))                            throw new ValidationException('quantity > 0')
-    if (!price.mod(pair.tickSize).isZero())         throw new ValidationException('invalid tickSize')
-    if (!quantity.mod(pair.stepSize).isZero())      throw new ValidationException('invalid stepSize')
-    if (quantity.lt(pair.minQuantity))              throw new ValidationException('quantity < minQuantity')
-    if (price.mul(quantity).lt(pair.minNotional))   throw new ValidationException('notional < minNotional')
-
-    // 4. Lock amount
-    const isBuy         = dto.side === OrderSide.BUY
-    const lockedAssetId = isBuy ? pair.quoteAssetId : pair.baseAssetId
-    const lockedAmount  = isBuy ? price.mul(quantity) : quantity
-
-    // 5. Wallet lock + 2 LedgerEntry ORDER_LOCK
-    const wallet = await this.walletsService.findWalletByAssetId(userId, lockedAssetId)
-    await this.walletBalanceService.moveAvailableToLocked(tx, {
-      walletId: wallet.id, amount: lockedAmount,
-      operationId: orderId, referenceType: 'ORDER', referenceId: orderId,
-    })
-
-    // 6. orderSequence — non-blocking nextval()
-    const orderSeq = await nextOrderSequence(tx, pair.id)
-
-    // 7. Order PENDING
-    const order = await tx.order.create({ data: {
-      id: orderId, userId, tradingPairId: pair.id,
-      side: dto.side, status: OrderStatus.PENDING,
-      price, quantity,
-      filledQuantity:        new Prisma.Decimal(0),
-      remainingQuantity:     quantity,
-      lockedAssetId, lockedAmount, remainingLockedAmount: lockedAmount,
-      orderSequence: orderSeq, idempotencyKey,
-      idempotencyPayloadHash: hashOrderPayload(dto.symbol, dto.side, dto.type, price, quantity),
-    }})
-
-    // 8. commandSequence — non-blocking nextval()
-    const cmdSeq = await nextCommandSequence(tx, pair.id)
-
-    // 9. Outbox PlaceOrder
-    await tx.outboxEvent.create({ data: {
-      messageId: uuidv7(), version: 1, correlationId: uuidv7(),
-      streamName: 'stream:engine:commands', messageType: 'PlaceOrder',
-      partitionKey: pair.id, commandSequence: cmdSeq, occurredAt: new Date(),
-      payload: {
-        tradingPairId: pair.id, market: pair.symbol,
-        orderId: order.id, userId, side: dto.side, type: 'LIMIT',
-        price: price.toFixed(18), quantity: quantity.toFixed(18),
-        orderSequence: orderSeq.toString(), createdAt: order.createdAt.toISOString(),
-      },
-    }})
-
-    return { orderId: order.id, status: order.status }
-  }, { timeout: 10_000 })
+  }
 }
 ```
 
 ---
 
-## 9. [FIX #2] CancelOrder — SELECT FOR UPDATE
+## Phần C — Backend Worker: OutboxPollerService
 
-### Vấn đề race condition
+### File: `src/modules/outbox/outbox-poller.service.ts`
 
-```
-T=0ms  Cancel API:    reads order → status=OPEN
-T=1ms  Settlement:    fills order → status=FILLED, balance debited
-T=2ms  Cancel API:    writes status=CANCEL_PENDING → ghi đè lên FILLED
-Kết quả: order báo "đang hủy" nhưng tiền đã bị trừ
-```
-
-### Fix: FOR UPDATE lock trước khi check status
+**Nhiệm vụ:** Poll `outbox_events` (status=PENDING) → publish lên Redis Stream.
 
 ```typescript
-async cancelOrder(userId: string, orderId: string) {
-  return this.prisma.$transaction(async (tx) => {
-    // 1. Lock row — ngăn Settlement race
-    const rows = await tx.$queryRaw<
-      { id: string; user_id: string; status: string; trading_pair_id: string }[]
-    >`SELECT id, user_id, status, trading_pair_id
-      FROM orders WHERE id = ${orderId}::uuid
-      FOR UPDATE`
+@Injectable()
+export class OutboxPollerService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
+  private running = true;
 
-    const order = rows[0]
-    if (!order || order.user_id !== userId) throw new OrderNotFoundException()
-
-    // 2. Validate status SAU KHI đã lock
-    const cancellable = [OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED]
-    if (!cancellable.includes(order.status as OrderStatus))
-      throw new OrderNotCancellableException()
-
-    // 3. Update sang CANCEL_PENDING
-    const updated = await tx.order.update({
-      where: { id: orderId },
-      data: { status: OrderStatus.CANCEL_PENDING },
-    })
-
-    // 4. commandSequence
-    const cmdSeq = await nextCommandSequence(tx, order.trading_pair_id)
-
-    // 5. Outbox CancelOrder
-    await tx.outboxEvent.create({ data: {
-      messageId: uuidv7(), version: 1, correlationId: uuidv7(),
-      streamName: 'stream:engine:commands', messageType: 'CancelOrder',
-      partitionKey: order.trading_pair_id, commandSequence: cmdSeq, occurredAt: new Date(),
-      payload: {
-        tradingPairId: order.trading_pair_id, orderId, userId,
-        requestedBy: 'USER', requestedAt: new Date().toISOString(),
-      },
-    }})
-
-    return { orderId, status: updated.status }
-  })
-}
-```
-
-> Khi Cancel giữ `FOR UPDATE` lock → Settlement phải chờ.
-> Khi Settlement giữ lock → Cancel phải chờ.
-> Không có race window.
-
----
-
-## 10. OrderQueryService
-
-```typescript
-// getActiveOrders
-findMany({
-  where: {
-    userId,
-    status: { in: [PENDING, OPEN, PARTIALLY_FILLED, CANCEL_PENDING] },
-    ...(symbol && { tradingPair: { symbol } }),
-  },
-  orderBy: { createdAt: "desc" },
-});
-
-// getOrderHistory — cursor (createdAt DESC, id DESC), dùng lại encodeCursor/decodeCursor
-// getOrderById — throw 404 nếu order.userId !== userId
-```
-
----
-
-## 11. Controller — Thứ Tự Route Quan Trọng
-
-```typescript
-@Controller('orders')
-@UseGuards(JwtAuthGuard)
-export class OrdersController {
-  @Post()
-  placeOrder(@Headers('idempotency-key') key: string, ...) {
-    if (!key?.trim()) throw new BadRequestException({ error: { code: 'VALIDATION_ERROR', message: 'Idempotency-Key required' } })
-    return this.ordersService.placeOrder(...)
+  async onApplicationBootstrap() {
+    void this.pollLoop();
   }
 
-  @Get('active')      // ← PHẢI trước @Get(':orderId')
-  getActiveOrders(...) {}
+  async onApplicationShutdown() {
+    this.running = false;
+  }
 
-  @Get()
-  getOrderHistory(...) {}
+  private async pollLoop() {
+    while (this.running) {
+      try {
+        await this.processBatch();
+      } catch (err) {
+        this.logger.error("Outbox poll error", err);
+      }
+      await sleep(100); // 100ms interval
+    }
+  }
 
-  @Get(':orderId')    // ← PHẢI sau @Get('active')
-  getOrderById(...) {}
+  private async processBatch() {
+    await this.prisma.$transaction(async (tx) => {
+      // SELECT FOR UPDATE SKIP LOCKED — safe với multi-worker
+      const rows = await tx.$queryRaw<OutboxRow[]>`
+        SELECT id, message_id, stream_name, partition_key,
+               command_sequence, message_type, payload, retry_count
+        FROM outbox_events
+        WHERE status = 'PENDING'
+          AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+        ORDER BY command_sequence ASC NULLS LAST, created_at ASC
+        LIMIT 50
+        FOR UPDATE SKIP LOCKED
+      `;
 
-  @Post(':orderId/cancel')
-  @HttpCode(HttpStatus.OK)
-  cancelOrder(...) {}
+      for (const row of rows) {
+        try {
+          // XADD stream:engine:commands * field value ...
+          await this.redis.xadd(
+            row.stream_name,
+            "*",
+            "messageId",
+            row.message_id,
+            "messageType",
+            row.message_type,
+            "partitionKey",
+            row.partition_key ?? "",
+            "commandSeq",
+            row.command_sequence?.toString() ?? "",
+            "payload",
+            JSON.stringify(row.payload),
+          );
+
+          await tx.$executeRaw`
+            UPDATE outbox_events
+            SET status = 'PUBLISHED', published_at = NOW()
+            WHERE id = ${row.id}::uuid
+          `;
+        } catch (err) {
+          // Retry với exponential backoff
+          const nextRetry = computeNextRetry(row.retry_count);
+          await tx.$executeRaw`
+            UPDATE outbox_events
+            SET retry_count = retry_count + 1,
+                last_error = ${String(err)},
+                next_retry_at = ${nextRetry},
+                status = CASE WHEN retry_count >= 5 THEN 'FAILED' ELSE status END
+            WHERE id = ${row.id}::uuid
+          `;
+        }
+      }
+    });
+  }
+}
+```
+
+**Retry policy:**
+| retry_count | next_retry_at |
+|------------|--------------|
+| 0 | +1s |
+| 1 | +2s |
+| 2 | +4s |
+| 3 | +8s |
+| 4 | +16s |
+| ≥5 | status = FAILED |
+
+---
+
+## Phần D — Backend Worker: EngineEventConsumerService
+
+### File: `src/modules/engine-events/engine-event-consumer.service.ts`
+
+**Consumer group:** `backend-engine-events-v1`
+**Stream:** `stream:engine:events`
+
+```typescript
+@Injectable()
+export class EngineEventConsumerService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
+  private running = true;
+  private readonly CONSUMER_NAME = "backend-worker-1";
+  private readonly GROUP = "backend-engine-events-v1";
+  private readonly STREAM = "stream:engine:events";
+
+  async onApplicationBootstrap() {
+    await this.ensureConsumerGroup();
+    void this.consumeLoop();
+  }
+
+  private async ensureConsumerGroup() {
+    try {
+      await this.redis.xgroup(
+        "CREATE",
+        this.STREAM,
+        this.GROUP,
+        "$",
+        "MKSTREAM",
+      );
+    } catch (err: any) {
+      if (!err.message.includes("BUSYGROUP")) throw err;
+      // group đã tồn tại → OK
+    }
+  }
+
+  private async consumeLoop() {
+    while (this.running) {
+      try {
+        const results = await this.redis.xreadgroup(
+          "GROUP",
+          this.GROUP,
+          this.CONSUMER_NAME,
+          "COUNT",
+          "10",
+          "BLOCK",
+          "200",
+          "STREAMS",
+          this.STREAM,
+          ">",
+        );
+        if (!results) continue;
+
+        for (const [, messages] of results) {
+          for (const [streamId, fields] of messages) {
+            await this.handleMessage(streamId, parseFields(fields));
+          }
+        }
+      } catch (err) {
+        this.logger.error("Consumer loop error", err);
+        await sleep(1000);
+      }
+    }
+  }
+
+  private async handleMessage(streamId: string, msg: EngineMessage) {
+    const payload = JSON.parse(msg.payload);
+    const payloadHash = sha256(msg.payload);
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Idempotency check
+      const inserted = await tx.$executeRaw`
+        INSERT INTO processed_events (id, consumer_name, message_id, message_type, payload_hash, result, processed_at)
+        VALUES (${uuidv7()}::uuid, ${"backend-engine-events-v1"}, ${msg.messageId}::uuid,
+                ${msg.messageType}, ${payloadHash}, 'OK', NOW())
+        ON CONFLICT (consumer_name, message_id) DO NOTHING
+      `;
+
+      if (inserted === 0) {
+        // Đã xử lý — kiểm tra payloadHash conflict
+        const existing = await tx.processedEvent.findFirst({
+          where: {
+            consumerName: "backend-engine-events-v1",
+            messageId: msg.messageId,
+          },
+        });
+        if (existing?.payloadHash !== payloadHash) {
+          // Payload khác → dead-letter
+          await this.deadLetter(msg);
+        }
+        // Same payload → skip idempotent
+        return;
+      }
+
+      // 2. Dispatch handler
+      switch (msg.messageType) {
+        case "MarketOpened":
+          await this.onMarketOpened(tx, payload);
+          break;
+        case "OrderOpened":
+          await this.onOrderOpened(tx, payload);
+          break;
+        case "OrderRejected":
+          await this.onOrderRejected(tx, payload);
+          break;
+        case "OrderCancelled":
+          await this.onOrderCancelled(tx, payload);
+          break;
+        case "CancelOrderRejected":
+          await this.onCancelOrderRejected(tx, payload);
+          break;
+        case "TradeCreated": // Phase 7
+        case "OrderBookChanged": // Phase 9
+        case "EngineFailed":
+          await this.onEngineFailed(tx, payload);
+          break;
+        default:
+          this.logger.warn(`Unknown event type: ${msg.messageType}`);
+      }
+    }); // commit
+
+    // 3. ACK SAU commit
+    await this.redis.xack(this.STREAM, this.GROUP, streamId);
+  }
+}
+```
+
+### Handlers (Phase 6 scope)
+
+**`onMarketOpened`:**
+
+```typescript
+async onMarketOpened(tx, payload) {
+  await tx.tradingPair.update({
+    where: { id: payload.tradingPairId },
+    data: { status: TradingPairStatus.READY },
+  });
+  this.logger.log(`Market READY: ${payload.market}`);
+}
+```
+
+**`onOrderOpened`:**
+
+```typescript
+async onOrderOpened(tx, payload) {
+  // Chỉ chuyển PENDING → OPEN
+  // Nếu đang PARTIALLY_FILLED (đã settlement trước đó): skip
+  await tx.order.updateMany({
+    where: { id: payload.orderId, status: OrderStatus.PENDING },
+    data: { status: OrderStatus.OPEN },
+  });
+}
+```
+
+**`onOrderRejected`:** _(Phase 6 — chỉ update status, unlock balance Phase 7)_
+
+```typescript
+async onOrderRejected(tx, payload) {
+  await tx.order.updateMany({
+    where: { id: payload.orderId, status: OrderStatus.PENDING },
+    data: { status: OrderStatus.REJECTED },
+  });
+  // TODO Phase 7: unlock wallet balance
+}
+```
+
+**`onEngineFailed`:**
+
+```typescript
+async onEngineFailed(tx, payload) {
+  // COMMAND_SEQUENCE_GAP → SUSPEND trading pair
+  if (payload.failureCode === 'COMMAND_SEQUENCE_GAP') {
+    await tx.tradingPair.update({
+      where: { id: payload.tradingPairId },
+      data: { status: TradingPairStatus.SUSPENDED },
+    });
+    this.logger.error(`Engine sequence gap: ${payload.market} — SUSPENDED`);
+  }
 }
 ```
 
 ---
 
-## 12. Exceptions Cần Tạo (7 files)
+## Phần E — Wire WorkerModule
 
+```typescript
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: "../../.env" }),
+    PrismaModule,
+    RedisModule,
+  ],
+  providers: [
+    OpenMarketBootstrapService,
+    OutboxPollerService,
+    EngineEventConsumerService,
+  ],
+})
+export class WorkerModule {}
 ```
-src/common/exceptions/
-├── market-not-found.exception.ts        # 404
-├── market-not-ready.exception.ts        # 422 MARKET_NOT_READY
-├── market-suspended.exception.ts        # 422 MARKET_SUSPENDED
-├── idempotency-conflict.exception.ts    # 409 IDEMPOTENCY_CONFLICT
-├── order-not-found.exception.ts         # 404 ORDER_NOT_FOUND
-├── order-not-cancellable.exception.ts   # 422 ORDER_NOT_CANCELLABLE
-└── validation.exception.ts             # 422 VALIDATION_ERROR
-```
-
-Format: `{ error: { code: '...', message: '...' } }`
 
 ---
 
-## 13. Definition of Done
+## Phần F — Go Matching Engine
 
-### Core
+### F1. Cấu trúc thư mục
 
-- [ ] PlaceOrder: Order PENDING + 2 LedgerEntry ORDER_LOCK + Outbox
-- [ ] Sequences dùng `nextval()`, không UPDATE table
-- [ ] Idempotency: same key+payload → 200; same key+diff payload → 409
-- [ ] Cancel: `FOR UPDATE` trước check status
-- [ ] Cancel: PENDING/FILLED/CANCELLED/REJECTED → 422
-- [ ] Cancel order của user khác → 404
-- [ ] Market không READY → 422; Balance không đủ → 422
-- [ ] Thiếu Idempotency-Key → 400
-- [ ] Transaction rollback toàn bộ khi bất kỳ bước fail
-
-### Query
-
-- [ ] GET /orders/active: đúng 4 statuses, chỉ của user hiện tại
-- [ ] Route `active` match trước `:orderId`
-- [ ] Cursor pagination ổn định
-
-### Build
-
-- [ ] TypeScript clean, ESLint pass
-- [ ] PostgreSQL sequences tồn tại trước khi PlaceOrder
+```
+services/matching-engine/
+├── cmd/engine/
+│   └── main.go              ← entrypoint
+├── internal/
+│   ├── fixed/
+│   │   ├── decimal.go       ← fixed-point arithmetic (scale=18)
+│   │   └── decimal_test.go
+│   ├── message/
+│   │   ├── command.go       ← PlaceOrder, CancelOrder, OpenMarket DTOs
+│   │   └── event.go         ← TradeCreated, OrderOpened, ... DTOs
+│   ├── orderbook/
+│   │   ├── order.go         ← Order struct
+│   │   ├── price_level.go   ← PriceLevel (FIFO queue)
+│   │   ├── side_book.go     ← SideBook (heap + map)
+│   │   └── order_book.go    ← OrderBook = bids + asks + activeOrders
+│   ├── matching/
+│   │   └── matcher.go       ← PlaceOrder / CancelOrder algorithm
+│   ├── pair/
+│   │   ├── engine.go        ← PairEngine: state + sequence + command dispatch
+│   │   └── state.go         ← State machine RECOVERING/READY/SUSPENDED/FAILED
+│   ├── publisher/
+│   │   └── redis_publisher.go ← XADD stream:engine:events
+│   └── transport/
+│       └── redis_consumer.go  ← XREADGROUP + XACK stream:engine:commands
+├── go.mod
+├── go.sum
+├── Makefile
+└── Dockerfile
+```
 
 ---
 
-## 14. Thứ Tự Implement
+### F2. `internal/fixed/decimal.go`
+
+```go
+package fixed
+
+import (
+    "fmt"
+    "math/big"
+    "strings"
+)
+
+const Scale = 18
+var scaleInt = new(big.Int).Exp(big.NewInt(10), big.NewInt(Scale), nil)
+
+// Decimal là fixed-point integer: value = raw / 10^18
+type Decimal struct {
+    raw *big.Int
+}
+
+func Zero() Decimal  { return Decimal{raw: big.NewInt(0)} }
+
+// Parse từ string "1.500000000000000000"
+func Parse(s string) (Decimal, error) {
+    parts := strings.SplitN(s, ".", 2)
+    intPart := new(big.Int)
+    if _, ok := intPart.SetString(parts[0], 10); !ok {
+        return Zero(), fmt.Errorf("invalid decimal: %s", s)
+    }
+
+    raw := new(big.Int).Mul(intPart, scaleInt)
+    if len(parts) == 2 {
+        frac := parts[1]
+        if len(frac) > Scale {
+            frac = frac[:Scale]
+        } else {
+            frac = frac + strings.Repeat("0", Scale-len(frac))
+        }
+        fracInt := new(big.Int)
+        if _, ok := fracInt.SetString(frac, 10); !ok {
+            return Zero(), fmt.Errorf("invalid decimal fraction: %s", s)
+        }
+        raw.Add(raw, fracInt)
+    }
+    return Decimal{raw: raw}, nil
+}
+
+func (d Decimal) Add(other Decimal) Decimal {
+    return Decimal{raw: new(big.Int).Add(d.raw, other.raw)}
+}
+func (d Decimal) Sub(other Decimal) Decimal {
+    return Decimal{raw: new(big.Int).Sub(d.raw, other.raw)}
+}
+func (d Decimal) Cmp(other Decimal) int {
+    return d.raw.Cmp(other.raw)
+}
+func (d Decimal) IsZero() bool {
+    return d.raw.Sign() == 0
+}
+func (d Decimal) String() string {
+    // Convert back to "integer.fraction" string với 18 decimal places
+    abs := new(big.Int).Abs(d.raw)
+    intPart := new(big.Int).Div(abs, scaleInt)
+    fracPart := new(big.Int).Mod(abs, scaleInt)
+    sign := ""
+    if d.raw.Sign() < 0 { sign = "-" }
+    return fmt.Sprintf("%s%s.%018d", sign, intPart.String(), fracPart)
+}
+// Min lấy giá trị nhỏ hơn
+func Min(a, b Decimal) Decimal {
+    if a.Cmp(b) <= 0 { return a }
+    return b
+}
+```
+
+---
+
+### F3. `internal/orderbook/` structs
+
+**`order.go`:**
+
+```go
+type Side string
+const (
+    SideBuy  Side = "BUY"
+    SideSell Side = "SELL"
+)
+
+type Order struct {
+    OrderID       string
+    UserID        string
+    TradingPairID string
+    Side          Side
+    Price         fixed.Decimal
+    OriginalQty   fixed.Decimal
+    RemainingQty  fixed.Decimal
+    OrderSeq      uint64
+}
+```
+
+**`price_level.go`:**
+
+```go
+import "container/list"
+
+type PriceLevel struct {
+    Price         fixed.Decimal
+    TotalQuantity fixed.Decimal
+    orders        *list.List          // FIFO queue of *Order
+    orderMap      map[string]*list.Element // orderId → element (O(1) cancel)
+}
+
+func (pl *PriceLevel) Enqueue(o *Order) { /* push back */ }
+func (pl *PriceLevel) Front() *Order    { /* peek front */ }
+func (pl *PriceLevel) Dequeue() *Order  { /* pop front */ }
+func (pl *PriceLevel) Remove(orderID string) bool { /* remove by id */ }
+func (pl *PriceLevel) IsEmpty() bool { return pl.orders.Len() == 0 }
+```
+
+**`side_book.go`:**
+
+```go
+// Bid: max-heap (giá cao ưu tiên)
+// Ask: min-heap (giá thấp ưu tiên)
+type SideBook struct {
+    side   Side
+    heap   PriceHeap               // heap.Interface
+    levels map[string]*PriceLevel  // price.String() → PriceLevel
+}
+
+func (sb *SideBook) BestPrice() (fixed.Decimal, bool)
+func (sb *SideBook) GetOrCreateLevel(price fixed.Decimal) *PriceLevel
+func (sb *SideBook) RemoveLevelIfEmpty(price fixed.Decimal)
+func (sb *SideBook) AddOrder(o *Order)
+func (sb *SideBook) RemoveOrder(orderID string, price fixed.Decimal) bool
+```
+
+**`order_book.go`:**
+
+```go
+type OrderBook struct {
+    Bids         SideBook
+    Asks         SideBook
+    activeOrders map[string]*Order // orderId → *Order (O(1) lookup cho cancel)
+}
+
+func NewOrderBook() *OrderBook
+func (ob *OrderBook) AddOrder(o *Order)
+func (ob *OrderBook) RemoveOrder(orderID string) (*Order, bool)
+func (ob *OrderBook) BestBid() (fixed.Decimal, bool)
+func (ob *OrderBook) BestAsk() (fixed.Decimal, bool)
+```
+
+---
+
+### F4. `internal/matching/matcher.go` — Matching Algorithm
+
+```go
+type MatchResult struct {
+    Trades       []TradeResult
+    IncomingFull bool // incoming đã fill hết
+}
+
+type TradeResult struct {
+    MatchIndex     int
+    RestingOrderID string
+    IncomingOrderID string
+    ExecutionPrice  fixed.Decimal // = resting price
+    ExecutedQty     fixed.Decimal
+    RestingFull     bool // resting đã fill hết
+}
+
+func Match(book *OrderBook, incoming *Order, cmdSeq uint64) MatchResult {
+    var trades []TradeResult
+    matchIndex := 0
+
+    for !incoming.RemainingQty.IsZero() {
+        // Lấy best opposite
+        var bestPrice fixed.Decimal
+        var hasBest bool
+        if incoming.Side == SideBuy {
+            bestPrice, hasBest = book.Asks.BestPrice()
+        } else {
+            bestPrice, hasBest = book.Bids.BestPrice()
+        }
+
+        if !hasBest { break }
+
+        // Price cross check
+        if incoming.Side == SideBuy && incoming.Price.Cmp(bestPrice) < 0 { break }
+        if incoming.Side == SideSell && incoming.Price.Cmp(bestPrice) > 0 { break }
+
+        // Lấy resting order (FIFO front)
+        var level *PriceLevel
+        if incoming.Side == SideBuy {
+            level = book.Asks.levels[bestPrice.String()]
+        } else {
+            level = book.Bids.levels[bestPrice.String()]
+        }
+        resting := level.Front()
+
+        executedQty := fixed.Min(incoming.RemainingQty, resting.RemainingQty)
+        executionPrice := resting.Price // maker price
+
+        // Update quantities
+        incoming.RemainingQty = incoming.RemainingQty.Sub(executedQty)
+        resting.RemainingQty = resting.RemainingQty.Sub(executedQty)
+        level.TotalQuantity = level.TotalQuantity.Sub(executedQty)
+
+        restingFull := resting.RemainingQty.IsZero()
+        if restingFull {
+            level.Dequeue()
+            book.activeOrders[resting.OrderID] = nil
+            delete(book.activeOrders, resting.OrderID)
+            if level.IsEmpty() {
+                if incoming.Side == SideBuy {
+                    book.Asks.RemoveLevelIfEmpty(bestPrice)
+                } else {
+                    book.Bids.RemoveLevelIfEmpty(bestPrice)
+                }
+            }
+        }
+
+        trades = append(trades, TradeResult{
+            MatchIndex:      matchIndex,
+            RestingOrderID:  resting.OrderID,
+            IncomingOrderID: incoming.OrderID,
+            ExecutionPrice:  executionPrice,
+            ExecutedQty:     executedQty,
+            RestingFull:     restingFull,
+        })
+        matchIndex++
+    }
+
+    // Nếu còn remaining → add vào book
+    if !incoming.RemainingQty.IsZero() {
+        book.AddOrder(incoming)
+    }
+
+    return MatchResult{
+        Trades:       trades,
+        IncomingFull: incoming.RemainingQty.IsZero(),
+    }
+}
+```
+
+---
+
+### F5. `internal/pair/engine.go` — PairEngine
+
+```go
+type PairEngine struct {
+    PairID                   string
+    Market                   string
+    State                    EngineState
+    Book                     *OrderBook
+    LastProcessedCmdSeq      uint64
+    LastTradeSequence        uint64
+    LastBookSequence         uint64
+    InFlight                 *InFlightBatch
+}
+
+type InFlightBatch struct {
+    CommandSequence uint64
+    Events          []message.EventEnvelope
+}
+
+func (e *PairEngine) HandleOpenMarket(cmd OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope
+func (e *PairEngine) HandlePlaceOrder(cmd PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope
+func (e *PairEngine) HandleCancelOrder(cmd CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope
+
+// Sequence validation
+func (e *PairEngine) validateSeq(cmdSeq uint64) error {
+    expected := e.LastProcessedCmdSeq + 1
+    if cmdSeq < expected {
+        return ErrDuplicateCommand // đã xử lý, skip
+    }
+    if cmdSeq > expected {
+        return ErrSequenceGap // block Pair
+    }
+    return nil
+}
+```
+
+**HandlePlaceOrder chi tiết:**
+
+```go
+func (e *PairEngine) HandlePlaceOrder(cmd PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
+    if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
+        return nil // không mutate, không emit
+    } else if err == ErrSequenceGap {
+        e.State = StateFailed
+        return []EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", ...)}
+    }
+
+    if e.State != StateReady {
+        return []EventEnvelope{buildOrderRejected(cmd.OrderID, "MARKET_NOT_READY")}
+    }
+
+    incoming := &Order{...} // parse từ cmd
+    result := matching.Match(e.Book, incoming, cmdSeq)
+
+    var events []EventEnvelope
+    tradeSeq := e.LastTradeSequence
+
+    // Build TradeCreated events
+    for _, trade := range result.Trades {
+        tradeSeq++
+        engineMatchId := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
+        events = append(events, buildTradeCreated(trade, tradeSeq, engineMatchId, cmdSeq, ...))
+    }
+
+    // OrderOpened — CHỈ khi incoming chưa full fill
+    if !result.IncomingFull {
+        events = append(events, buildOrderOpened(cmd.OrderID, incoming.RemainingQty))
+    }
+
+    // OrderBookChanged — luôn emit sau PlaceOrder
+    e.LastBookSequence++
+    events = append(events, buildOrderBookChanged(e))
+
+    e.LastTradeSequence = tradeSeq
+    e.LastProcessedCmdSeq = cmdSeq
+    return events
+}
+```
+
+---
+
+### F6. `internal/transport/redis_consumer.go`
+
+```go
+func (c *Consumer) Run(ctx context.Context) error {
+    // Đảm bảo consumer group tồn tại
+    c.redis.XGroupCreateMkStream(ctx, "stream:engine:commands", "matching-engine-v1", "$")
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil
+        default:
+        }
+
+        results, err := c.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
+            Group:    "matching-engine-v1",
+            Consumer: "engine-1",
+            Streams:  []string{"stream:engine:commands", ">"},
+            Count:    10,
+            Block:    200 * time.Millisecond,
+        }).Result()
+
+        if err == redis.Nil { continue } // no messages
+        if err != nil { /* log, sleep, retry */ continue }
+
+        for _, stream := range results {
+            for _, msg := range stream.Messages {
+                c.handleCommand(ctx, msg)
+            }
+        }
+    }
+}
+
+func (c *Consumer) handleCommand(ctx context.Context, msg redis.XMessage) {
+    envelope := parseEnvelope(msg.Values)
+
+    // Tìm hoặc tạo PairEngine cho tradingPairId
+    engine := c.getOrCreateEngine(envelope.PartitionKey)
+
+    // Dispatch
+    var events []EventEnvelope
+    switch envelope.MessageType {
+    case "OpenMarket":  events = engine.HandleOpenMarket(...)
+    case "PlaceOrder":  events = engine.HandlePlaceOrder(...)
+    case "CancelOrder": events = engine.HandleCancelOrder(...)
+    }
+
+    if len(events) == 0 { // duplicate command
+        c.redis.XAck(ctx, "stream:engine:commands", "matching-engine-v1", msg.ID)
+        return
+    }
+
+    // Store InFlightBatch
+    engine.InFlight = &InFlightBatch{Events: events}
+
+    // Publish event batch → PHẢI thành công trước khi ACK
+    if err := c.publisher.PublishBatch(ctx, events); err != nil {
+        // KHÔNG ACK — retry tự động khi redeliver
+        return
+    }
+
+    // ACK SAU publish thành công
+    c.redis.XAck(ctx, "stream:engine:commands", "matching-engine-v1", msg.ID)
+    engine.InFlight = nil
+}
+```
+
+**`internal/publisher/redis_publisher.go`:**
+
+```go
+func (p *Publisher) PublishBatch(ctx context.Context, events []EventEnvelope) error {
+    pipe := p.redis.Pipeline()
+    for _, ev := range events {
+        payload, _ := json.Marshal(ev.Payload)
+        pipe.XAdd(ctx, &redis.XAddArgs{
+            Stream: "stream:engine:events",
+            Values: map[string]any{
+                "messageId":    ev.MessageID,
+                "messageType":  ev.MessageType,
+                "partitionKey": ev.PartitionKey,
+                "commandSeq":   ev.CommandSequence,
+                "payload":      string(payload),
+            },
+        })
+    }
+    _, err := pipe.Exec(ctx)
+    return err
+}
+```
+
+---
+
+### F7. `cmd/engine/main.go`
+
+```go
+func main() {
+    redisClient := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_URL")})
+    publisher := publisher.New(redisClient)
+    consumer := transport.NewConsumer(redisClient, publisher)
+
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer cancel()
+
+    log.Println("Matching Engine started")
+    if err := consumer.Run(ctx); err != nil {
+        log.Fatal(err)
+    }
+    log.Println("Matching Engine stopped")
+}
+```
+
+---
+
+## Phần G — Docker Compose
+
+```yaml
+# Thêm vào docker-compose.yml
+matching-engine:
+  build:
+    context: ./services/matching-engine
+    dockerfile: Dockerfile
+  environment:
+    REDIS_URL: redis:6379
+  depends_on:
+    - redis
+  restart: unless-stopped
+```
+
+**`Dockerfile` (Go multi-stage):**
+
+```dockerfile
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o engine ./cmd/engine
+
+FROM alpine:3.20
+WORKDIR /app
+COPY --from=builder /app/engine .
+CMD ["./engine"]
+```
+
+---
+
+## Thứ tự implement
 
 ```
-1.  7 Exceptions
-2.  helpers/idempotency.helper.ts
-3.  helpers/sequence.helper.ts         ← nextval()
-4.  seed.ts: thêm CREATE SEQUENCE
-5.  DTOs (4 files)
-6.  OrderQueryService
-7.  OrdersService.placeOrder
-8.  OrdersService.cancelOrder
-9.  OrdersController
-10. OrdersModule + AppModule
-11. Test manual
+A. Backend Worker
+   1. pnpm add ioredis --filter backend
+   2. core/redis/redis.module.ts
+   3. modules/outbox/outbox-poller.service.ts
+   4. modules/engine/open-market-bootstrap.service.ts
+   5. modules/engine-events/engine-event-consumer.service.ts
+      (handlers: MarketOpened, OrderOpened, OrderRejected, EngineFailed)
+   6. Wire WorkerModule
+
+B. Go Matching Engine
+   7.  go mod init github.com/haucex/matching-engine
+   8.  internal/fixed/decimal.go + test
+   9.  internal/orderbook/ (Order, PriceLevel, SideBook, OrderBook) + test
+   10. internal/matching/matcher.go + test
+       (full fill, partial fill, FIFO, no match)
+   11. internal/message/ (command + event DTOs)
+   12. internal/pair/engine.go (PlaceOrder, CancelOrder, OpenMarket, sequence)
+   13. internal/publisher/redis_publisher.go
+   14. internal/transport/redis_consumer.go
+   15. cmd/engine/main.go
+
+C. Infrastructure
+   16. Thêm matching-engine vào docker-compose.yml
+   17. .env: REDIS_URL
+
+D. Integration test
+   18. docker compose up
+   19. Chạy seed (pnpm db:seed)
+   20. Start Backend Worker
+   21. Verify TradingPair → READY (qua MarketOpened)
+   22. POST /orders → verify Order → OPEN (qua OrderOpened)
 ```
+
+---
+
+## Definition of Done
+
+- [ ] `docker compose up` — PostgreSQL + Redis + Backend API + Backend Worker + Go Engine đều start
+- [ ] Bootstrap: TradingPair SUSPENDED → Outbox OpenMarket tự tạo khi Worker start
+- [ ] Outbox poller đẩy `OpenMarket` lên `stream:engine:commands`
+- [ ] Go Engine consume `OpenMarket` → publish `MarketOpened` lên `stream:engine:events`
+- [ ] Backend Worker consume `MarketOpened` → `TradingPair.status = READY`
+- [ ] `POST /orders` → Order `PENDING` + Outbox `PlaceOrder` (đã xong Phase 5)
+- [ ] Outbox poller đẩy `PlaceOrder` lên Redis
+- [ ] Go Engine consume `PlaceOrder` → publish `OrderOpened` (no match case)
+- [ ] Backend Worker consume `OrderOpened` → `Order.status = OPEN`
+- [ ] Duplicate `messageId` → skip, không xử lý lại
+- [ ] `COMMAND_SEQUENCE_GAP` → TradingPair SUSPENDED + log
+- [ ] Redis down → poller retry, không crash
+- [ ] Go unit test pass: Full Fill, Partial Fill, FIFO Priority, No Match, Cancel
+- [ ] TypeScript build clean
+
+---
+
+## Notes
+
+> `TradeCreated` consumer (settlement) → **Phase 7**. Phase 6 chỉ log/skip TradeCreated.
+
+> `OrderBookChanged` consumer (realtime) → **Phase 9**. Phase 6 chỉ log/skip.
+
+> Go Engine là **stateless qua restart** — sau restart, pending list của Redis consumer group sẽ tự redeliver các command chưa ACK.
