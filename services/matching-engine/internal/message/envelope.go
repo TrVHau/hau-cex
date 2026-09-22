@@ -2,7 +2,7 @@ package message
 
 import "time"
 
-type MessageEnvelope struct {
+type EventEnvelope struct {
 	MessageID       string    `json:"messageId"`
 	MessageType     string    `json:"messageType"`
 	Version         int       `json:"version"`
