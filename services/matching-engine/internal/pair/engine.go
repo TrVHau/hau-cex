@@ -41,37 +41,26 @@ type InFlightBatch struct {
 }
 
 func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope {
-	// kierm tra validateSeq(cmdSeg) -> chuyern sang stateReady -> trả về marketopened event
 	if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
-		return nil // skip duplicate command
+		return nil
 	} else if err == ErrSequenceGap {
 		e.State = StateFailed
-		return []message.EventEnvelope{buildEngineFailed(
-			e,
-			cmdSeq,
-			"COMMAND_SEQUENCE_GAP",
-		)}
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
 	}
 	e.State = StateReady
 	e.LastProcessedCmdSeq = cmdSeq
 	return []message.EventEnvelope{buildMarketOpened(e)}
 }
+
 func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
 	if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
-		return nil // skip duplicate command
+		return nil
 	} else if err == ErrSequenceGap {
 		e.State = StateFailed
-		return []message.EventEnvelope{buildEngineFailed(
-			e,
-			cmdSeq,
-			"COMMAND_SEQUENCE_GAP",
-		)}
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
 	}
 	if e.State != StateReady {
-		return []message.EventEnvelope{buildEngineFailed(
-			cmd,
-			"MARKET_NOT_READY",
-		)}
+		return []message.EventEnvelope{buildOrderRejected(cmd, "MARKET_NOT_READY")}
 	}
 
 	incoming := &orderbook.Order{
@@ -89,8 +78,8 @@ func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint
 
 	for _, trade := range result.Trades {
 		e.LastTradeSequence++
-		engineMatchingId := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
-		events = append(events, buildTradeExecuted(e, trade, engineMatchingId, cmdSeq))
+		engineMatchId := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
+		events = append(events, buildTradeCreated(e, trade, engineMatchId, cmdSeq))
 	}
 
 	if !result.IncomingFull {
@@ -98,11 +87,11 @@ func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint
 	}
 
 	e.LastBookSequence++
-	events = append(events, buildOrderBook(e))
+	events = append(events, buildOrderBookChanged(e))
 	e.LastProcessedCmdSeq = cmdSeq
-
 	return events
 }
+
 func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope {
 	if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
 		return nil
@@ -124,7 +113,7 @@ func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq ui
 	e.LastProcessedCmdSeq = cmdSeq
 
 	return []message.EventEnvelope{
-		buildOrderCancelled(e, cmd, order.RemainingQuantity),
+		buildOrderCanceled(e, cmd, order.RemainingQuantity),
 		buildOrderBookChanged(e),
 	}
 }
