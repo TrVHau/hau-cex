@@ -1,845 +1,188 @@
-# Phase 6 — Engine Messaging (Chi Tiết)
+# Next Steps Plan — Phase 6 Completion & Phase 7 Preparation
 
-## Mục tiêu
+## Current State Audit
 
-Kết nối Backend ↔ Go Matching Engine qua Redis Streams. Khi xong Phase 6:
+### ✅ Done & Buildable
 
-```
-DB TradingPair SUSPENDED
-→ Outbox OpenMarket → Redis stream:engine:commands
-→ Go Engine consume → publish MarketOpened → stream:engine:events
-→ Backend Worker consume → DB TradingPair = READY
+| Component                                     | Status                  |
+| --------------------------------------------- | ----------------------- |
+| Backend API (Auth, Wallet, Ledger, Order API) | ✅ Builds clean         |
+| Prisma Schema (all models)                    | ✅ Complete             |
+| Seed (sequences, trading pairs, wallets)      | ✅ Complete             |
+| `RedisModule` (NestJS)                        | ✅ Done                 |
+| `OrderBook` data structures (Go)              | ✅ Done                 |
+| `Matcher` algorithm (Go)                      | ✅ Done (logic correct) |
+| `fixed.Decimal` (Go)                          | ✅ Done                 |
+| Docker Compose (Postgres + Redis)             | ✅ Done                 |
 
-POST /orders (PENDING + Outbox PlaceOrder)
-→ Outbox → Redis stream:engine:commands
-→ Go Engine consume → publish OrderOpened
-→ Backend Worker consume → DB Order = OPEN
-```
+### ❌ Broken / Incomplete — Must Fix Before Anything Else
 
----
+#### Go Engine (`services/matching-engine`)
 
-## Phần A — Backend Worker: RedisModule
+| File                           | Issue                                                                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/engine/main.go`           | `redis` and `consumer` packages imported but undefined — **compile error**                                                                  |
+| `internal/pair/engine.go`      | `HandleOpenMarket` body empty, `HandlePlaceOrder` has syntax error (`buil` incomplete), `HandleCancelOrder` has no body — **compile error** |
+| `internal/message/envelope.go` | Only `EventEnvelope` defined — missing `MessageEnvelope` (used by `pair/engine.go`)                                                         |
+| Missing packages               | `internal/publisher/`, `internal/transport/` don't exist yet                                                                                |
+| `go.mod`                       | `go 1.26.4` invalid (Go 1.26 doesn't exist) — should be `1.23`                                                                              |
 
-### File: `src/core/redis/redis.module.ts`
+#### Backend Worker (NestJS)
 
-```typescript
-@Global()
-@Module({
-  providers: [
-    {
-      provide: "REDIS_CLIENT",
-      useFactory: () => new Redis(process.env.REDIS_URL),
-    },
-  ],
-  exports: ["REDIS_CLIENT"],
-})
-export class RedisModule {}
-```
-
-- Dùng `ioredis` (cài: `pnpm add ioredis --filter backend`)
-- `@Global()` — inject được từ bất kỳ module nào
-- Đọc `REDIS_URL` từ env (`.env.example`: `REDIS_URL=redis://localhost:6379`)
+| File                                              | Issue                                                                                              |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `modules/engine/open-market.bootstrap.service.ts` | Body is `async;k` — **compile error**, completely broken                                           |
+| `modules/outbox/outbox-poller.service.ts`         | **Empty file** — nothing implemented                                                               |
+| `worker.module.ts`                                | Still bare skeleton — `RedisModule`, `OutboxPollerService`, `OpenMarketBootstrapService` NOT wired |
+| `modules/engine-events/`                          | **Directory doesn't exist** — `EngineEventConsumerService` not created                             |
 
 ---
 
-## Phần B — Backend Worker: OpenMarketBootstrapService
-
-### File: `src/modules/engine/open-market-bootstrap.service.ts`
-
-**Khi worker start**, scan tất cả TradingPair status ≠ READY → tạo Outbox `OpenMarket` nếu chưa có.
-
-```typescript
-@Injectable()
-export class OpenMarketBootstrapService implements OnApplicationBootstrap {
-  async onApplicationBootstrap() {
-    // SELECT * FROM trading_pairs WHERE status != 'READY'
-    const pairs = await this.prisma.tradingPair.findMany({
-      where: { status: { not: TradingPairStatus.READY } },
-    });
-
-    for (const pair of pairs) {
-      // Check xem đã có Outbox OpenMarket chưa (idempotent)
-      const existing = await this.prisma.outboxEvent.findFirst({
-        where: {
-          messageType: "OpenMarket",
-          payload: { path: ["tradingPairId"], equals: pair.id },
-          status: { not: OutboxStatus.FAILED },
-        },
-      });
-      if (existing) continue;
-
-      await this.prisma.outboxEvent.create({
-        data: {
-          messageId: uuidv7(),
-          version: 1,
-          correlationId: uuidv7(),
-          streamName: "stream:engine:commands",
-          messageType: "OpenMarket",
-          partitionKey: pair.id,
-          commandSequence: await nextCommandSequence(tx, pair.id),
-          occurredAt: new Date(),
-          payload: {
-            tradingPairId: pair.id,
-            market: pair.symbol,
-            baseAssetId: pair.baseAssetId,
-            quoteAssetId: pair.quoteAssetId,
-            pricePrecision: 18,
-            quantityPrecision: 18,
-            tickSize: pair.tickSize.toFixed(18),
-            stepSize: pair.stepSize.toFixed(18),
-            minQuantity: pair.minQuantity.toFixed(18),
-            minNotional: pair.minNotional.toFixed(18),
-            openedAt: new Date().toISOString(),
-          },
-        },
-      });
-    }
-  }
-}
-```
+## Step-by-Step Plan
 
 ---
 
-## Phần C — Backend Worker: OutboxPollerService
+### STEP 1 — Fix Go `go.mod` and `message` package
 
-### File: `src/modules/outbox/outbox-poller.service.ts`
-
-**Nhiệm vụ:** Poll `outbox_events` (status=PENDING) → publish lên Redis Stream.
-
-```typescript
-@Injectable()
-export class OutboxPollerService
-  implements OnApplicationBootstrap, OnApplicationShutdown
-{
-  private running = true;
-
-  async onApplicationBootstrap() {
-    void this.pollLoop();
-  }
-
-  async onApplicationShutdown() {
-    this.running = false;
-  }
-
-  private async pollLoop() {
-    while (this.running) {
-      try {
-        await this.processBatch();
-      } catch (err) {
-        this.logger.error("Outbox poll error", err);
-      }
-      await sleep(100); // 100ms interval
-    }
-  }
-
-  private async processBatch() {
-    await this.prisma.$transaction(async (tx) => {
-      // SELECT FOR UPDATE SKIP LOCKED — safe với multi-worker
-      const rows = await tx.$queryRaw<OutboxRow[]>`
-        SELECT id, message_id, stream_name, partition_key,
-               command_sequence, message_type, payload, retry_count
-        FROM outbox_events
-        WHERE status = 'PENDING'
-          AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-        ORDER BY command_sequence ASC NULLS LAST, created_at ASC
-        LIMIT 50
-        FOR UPDATE SKIP LOCKED
-      `;
-
-      for (const row of rows) {
-        try {
-          // XADD stream:engine:commands * field value ...
-          await this.redis.xadd(
-            row.stream_name,
-            "*",
-            "messageId",
-            row.message_id,
-            "messageType",
-            row.message_type,
-            "partitionKey",
-            row.partition_key ?? "",
-            "commandSeq",
-            row.command_sequence?.toString() ?? "",
-            "payload",
-            JSON.stringify(row.payload),
-          );
-
-          await tx.$executeRaw`
-            UPDATE outbox_events
-            SET status = 'PUBLISHED', published_at = NOW()
-            WHERE id = ${row.id}::uuid
-          `;
-        } catch (err) {
-          // Retry với exponential backoff
-          const nextRetry = computeNextRetry(row.retry_count);
-          await tx.$executeRaw`
-            UPDATE outbox_events
-            SET retry_count = retry_count + 1,
-                last_error = ${String(err)},
-                next_retry_at = ${nextRetry},
-                status = CASE WHEN retry_count >= 5 THEN 'FAILED' ELSE status END
-            WHERE id = ${row.id}::uuid
-          `;
-        }
-      }
-    });
-  }
-}
-```
-
-**Retry policy:**
-| retry_count | next_retry_at |
-|------------|--------------|
-| 0 | +1s |
-| 1 | +2s |
-| 2 | +4s |
-| 3 | +8s |
-| 4 | +16s |
-| ≥5 | status = FAILED |
-
----
-
-## Phần D — Backend Worker: EngineEventConsumerService
-
-### File: `src/modules/engine-events/engine-event-consumer.service.ts`
-
-**Consumer group:** `backend-engine-events-v1`
-**Stream:** `stream:engine:events`
-
-```typescript
-@Injectable()
-export class EngineEventConsumerService
-  implements OnApplicationBootstrap, OnApplicationShutdown
-{
-  private running = true;
-  private readonly CONSUMER_NAME = "backend-worker-1";
-  private readonly GROUP = "backend-engine-events-v1";
-  private readonly STREAM = "stream:engine:events";
-
-  async onApplicationBootstrap() {
-    await this.ensureConsumerGroup();
-    void this.consumeLoop();
-  }
-
-  private async ensureConsumerGroup() {
-    try {
-      await this.redis.xgroup(
-        "CREATE",
-        this.STREAM,
-        this.GROUP,
-        "$",
-        "MKSTREAM",
-      );
-    } catch (err: any) {
-      if (!err.message.includes("BUSYGROUP")) throw err;
-      // group đã tồn tại → OK
-    }
-  }
-
-  private async consumeLoop() {
-    while (this.running) {
-      try {
-        const results = await this.redis.xreadgroup(
-          "GROUP",
-          this.GROUP,
-          this.CONSUMER_NAME,
-          "COUNT",
-          "10",
-          "BLOCK",
-          "200",
-          "STREAMS",
-          this.STREAM,
-          ">",
-        );
-        if (!results) continue;
-
-        for (const [, messages] of results) {
-          for (const [streamId, fields] of messages) {
-            await this.handleMessage(streamId, parseFields(fields));
-          }
-        }
-      } catch (err) {
-        this.logger.error("Consumer loop error", err);
-        await sleep(1000);
-      }
-    }
-  }
-
-  private async handleMessage(streamId: string, msg: EngineMessage) {
-    const payload = JSON.parse(msg.payload);
-    const payloadHash = sha256(msg.payload);
-
-    await this.prisma.$transaction(async (tx) => {
-      // 1. Idempotency check
-      const inserted = await tx.$executeRaw`
-        INSERT INTO processed_events (id, consumer_name, message_id, message_type, payload_hash, result, processed_at)
-        VALUES (${uuidv7()}::uuid, ${"backend-engine-events-v1"}, ${msg.messageId}::uuid,
-                ${msg.messageType}, ${payloadHash}, 'OK', NOW())
-        ON CONFLICT (consumer_name, message_id) DO NOTHING
-      `;
-
-      if (inserted === 0) {
-        // Đã xử lý — kiểm tra payloadHash conflict
-        const existing = await tx.processedEvent.findFirst({
-          where: {
-            consumerName: "backend-engine-events-v1",
-            messageId: msg.messageId,
-          },
-        });
-        if (existing?.payloadHash !== payloadHash) {
-          // Payload khác → dead-letter
-          await this.deadLetter(msg);
-        }
-        // Same payload → skip idempotent
-        return;
-      }
-
-      // 2. Dispatch handler
-      switch (msg.messageType) {
-        case "MarketOpened":
-          await this.onMarketOpened(tx, payload);
-          break;
-        case "OrderOpened":
-          await this.onOrderOpened(tx, payload);
-          break;
-        case "OrderRejected":
-          await this.onOrderRejected(tx, payload);
-          break;
-        case "OrderCancelled":
-          await this.onOrderCancelled(tx, payload);
-          break;
-        case "CancelOrderRejected":
-          await this.onCancelOrderRejected(tx, payload);
-          break;
-        case "TradeCreated": // Phase 7
-        case "OrderBookChanged": // Phase 9
-        case "EngineFailed":
-          await this.onEngineFailed(tx, payload);
-          break;
-        default:
-          this.logger.warn(`Unknown event type: ${msg.messageType}`);
-      }
-    }); // commit
-
-    // 3. ACK SAU commit
-    await this.redis.xack(this.STREAM, this.GROUP, streamId);
-  }
-}
-```
-
-### Handlers (Phase 6 scope)
-
-**`onMarketOpened`:**
-
-```typescript
-async onMarketOpened(tx, payload) {
-  await tx.tradingPair.update({
-    where: { id: payload.tradingPairId },
-    data: { status: TradingPairStatus.READY },
-  });
-  this.logger.log(`Market READY: ${payload.market}`);
-}
-```
-
-**`onOrderOpened`:**
-
-```typescript
-async onOrderOpened(tx, payload) {
-  // Chỉ chuyển PENDING → OPEN
-  // Nếu đang PARTIALLY_FILLED (đã settlement trước đó): skip
-  await tx.order.updateMany({
-    where: { id: payload.orderId, status: OrderStatus.PENDING },
-    data: { status: OrderStatus.OPEN },
-  });
-}
-```
-
-**`onOrderRejected`:** _(Phase 6 — chỉ update status, unlock balance Phase 7)_
-
-```typescript
-async onOrderRejected(tx, payload) {
-  await tx.order.updateMany({
-    where: { id: payload.orderId, status: OrderStatus.PENDING },
-    data: { status: OrderStatus.REJECTED },
-  });
-  // TODO Phase 7: unlock wallet balance
-}
-```
-
-**`onEngineFailed`:**
-
-```typescript
-async onEngineFailed(tx, payload) {
-  // COMMAND_SEQUENCE_GAP → SUSPEND trading pair
-  if (payload.failureCode === 'COMMAND_SEQUENCE_GAP') {
-    await tx.tradingPair.update({
-      where: { id: payload.tradingPairId },
-      data: { status: TradingPairStatus.SUSPENDED },
-    });
-    this.logger.error(`Engine sequence gap: ${payload.market} — SUSPENDED`);
-  }
-}
-```
-
----
-
-## Phần E — Wire WorkerModule
-
-```typescript
-@Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: "../../.env" }),
-    PrismaModule,
-    RedisModule,
-  ],
-  providers: [
-    OpenMarketBootstrapService,
-    OutboxPollerService,
-    EngineEventConsumerService,
-  ],
-})
-export class WorkerModule {}
-```
-
----
-
-## Phần F — Go Matching Engine
-
-### F1. Cấu trúc thư mục
+**`go.mod`** — fix Go version:
 
 ```
-services/matching-engine/
-├── cmd/engine/
-│   └── main.go              ← entrypoint
-├── internal/
-│   ├── fixed/
-│   │   ├── decimal.go       ← fixed-point arithmetic (scale=18)
-│   │   └── decimal_test.go
-│   ├── message/
-│   │   ├── command.go       ← PlaceOrder, CancelOrder, OpenMarket DTOs
-│   │   └── event.go         ← TradeCreated, OrderOpened, ... DTOs
-│   ├── orderbook/
-│   │   ├── order.go         ← Order struct
-│   │   ├── price_level.go   ← PriceLevel (FIFO queue)
-│   │   ├── side_book.go     ← SideBook (heap + map)
-│   │   └── order_book.go    ← OrderBook = bids + asks + activeOrders
-│   ├── matching/
-│   │   └── matcher.go       ← PlaceOrder / CancelOrder algorithm
-│   ├── pair/
-│   │   ├── engine.go        ← PairEngine: state + sequence + command dispatch
-│   │   └── state.go         ← State machine RECOVERING/READY/SUSPENDED/FAILED
-│   ├── publisher/
-│   │   └── redis_publisher.go ← XADD stream:engine:events
-│   └── transport/
-│       └── redis_consumer.go  ← XREADGROUP + XACK stream:engine:commands
-├── go.mod
-├── go.sum
-├── Makefile
-└── Dockerfile
+go 1.23
 ```
 
----
+Then add Redis dependency:
 
-### F2. `internal/fixed/decimal.go`
+```bash
+go get github.com/redis/go-redis/v9
+go get github.com/google/uuid
+```
+
+**`internal/message/envelope.go`** — add `MessageEnvelope` alias (engine.go references it):
 
 ```go
-package fixed
-
-import (
-    "fmt"
-    "math/big"
-    "strings"
-)
-
-const Scale = 18
-var scaleInt = new(big.Int).Exp(big.NewInt(10), big.NewInt(Scale), nil)
-
-// Decimal là fixed-point integer: value = raw / 10^18
-type Decimal struct {
-    raw *big.Int
-}
-
-func Zero() Decimal  { return Decimal{raw: big.NewInt(0)} }
-
-// Parse từ string "1.500000000000000000"
-func Parse(s string) (Decimal, error) {
-    parts := strings.SplitN(s, ".", 2)
-    intPart := new(big.Int)
-    if _, ok := intPart.SetString(parts[0], 10); !ok {
-        return Zero(), fmt.Errorf("invalid decimal: %s", s)
-    }
-
-    raw := new(big.Int).Mul(intPart, scaleInt)
-    if len(parts) == 2 {
-        frac := parts[1]
-        if len(frac) > Scale {
-            frac = frac[:Scale]
-        } else {
-            frac = frac + strings.Repeat("0", Scale-len(frac))
-        }
-        fracInt := new(big.Int)
-        if _, ok := fracInt.SetString(frac, 10); !ok {
-            return Zero(), fmt.Errorf("invalid decimal fraction: %s", s)
-        }
-        raw.Add(raw, fracInt)
-    }
-    return Decimal{raw: raw}, nil
-}
-
-func (d Decimal) Add(other Decimal) Decimal {
-    return Decimal{raw: new(big.Int).Add(d.raw, other.raw)}
-}
-func (d Decimal) Sub(other Decimal) Decimal {
-    return Decimal{raw: new(big.Int).Sub(d.raw, other.raw)}
-}
-func (d Decimal) Cmp(other Decimal) int {
-    return d.raw.Cmp(other.raw)
-}
-func (d Decimal) IsZero() bool {
-    return d.raw.Sign() == 0
-}
-func (d Decimal) String() string {
-    // Convert back to "integer.fraction" string với 18 decimal places
-    abs := new(big.Int).Abs(d.raw)
-    intPart := new(big.Int).Div(abs, scaleInt)
-    fracPart := new(big.Int).Mod(abs, scaleInt)
-    sign := ""
-    if d.raw.Sign() < 0 { sign = "-" }
-    return fmt.Sprintf("%s%s.%018d", sign, intPart.String(), fracPart)
-}
-// Min lấy giá trị nhỏ hơn
-func Min(a, b Decimal) Decimal {
-    if a.Cmp(b) <= 0 { return a }
-    return b
-}
+// MessageEnvelope = EventEnvelope (rename for clarity or alias)
+type MessageEnvelope = EventEnvelope
 ```
 
 ---
 
-### F3. `internal/orderbook/` structs
+### STEP 2 — Complete `internal/pair/engine.go`
 
-**`order.go`:**
+Three handlers need full implementation:
 
-```go
-type Side string
-const (
-    SideBuy  Side = "BUY"
-    SideSell Side = "SELL"
-)
-
-type Order struct {
-    OrderID       string
-    UserID        string
-    TradingPairID string
-    Side          Side
-    Price         fixed.Decimal
-    OriginalQty   fixed.Decimal
-    RemainingQty  fixed.Decimal
-    OrderSeq      uint64
-}
-```
-
-**`price_level.go`:**
+**`HandleOpenMarket`:**
 
 ```go
-import "container/list"
-
-type PriceLevel struct {
-    Price         fixed.Decimal
-    TotalQuantity fixed.Decimal
-    orders        *list.List          // FIFO queue of *Order
-    orderMap      map[string]*list.Element // orderId → element (O(1) cancel)
-}
-
-func (pl *PriceLevel) Enqueue(o *Order) { /* push back */ }
-func (pl *PriceLevel) Front() *Order    { /* peek front */ }
-func (pl *PriceLevel) Dequeue() *Order  { /* pop front */ }
-func (pl *PriceLevel) Remove(orderID string) bool { /* remove by id */ }
-func (pl *PriceLevel) IsEmpty() bool { return pl.orders.Len() == 0 }
-```
-
-**`side_book.go`:**
-
-```go
-// Bid: max-heap (giá cao ưu tiên)
-// Ask: min-heap (giá thấp ưu tiên)
-type SideBook struct {
-    side   Side
-    heap   PriceHeap               // heap.Interface
-    levels map[string]*PriceLevel  // price.String() → PriceLevel
-}
-
-func (sb *SideBook) BestPrice() (fixed.Decimal, bool)
-func (sb *SideBook) GetOrCreateLevel(price fixed.Decimal) *PriceLevel
-func (sb *SideBook) RemoveLevelIfEmpty(price fixed.Decimal)
-func (sb *SideBook) AddOrder(o *Order)
-func (sb *SideBook) RemoveOrder(orderID string, price fixed.Decimal) bool
-```
-
-**`order_book.go`:**
-
-```go
-type OrderBook struct {
-    Bids         SideBook
-    Asks         SideBook
-    activeOrders map[string]*Order // orderId → *Order (O(1) lookup cho cancel)
-}
-
-func NewOrderBook() *OrderBook
-func (ob *OrderBook) AddOrder(o *Order)
-func (ob *OrderBook) RemoveOrder(orderID string) (*Order, bool)
-func (ob *OrderBook) BestBid() (fixed.Decimal, bool)
-func (ob *OrderBook) BestAsk() (fixed.Decimal, bool)
-```
-
----
-
-### F4. `internal/matching/matcher.go` — Matching Algorithm
-
-```go
-type MatchResult struct {
-    Trades       []TradeResult
-    IncomingFull bool // incoming đã fill hết
-}
-
-type TradeResult struct {
-    MatchIndex     int
-    RestingOrderID string
-    IncomingOrderID string
-    ExecutionPrice  fixed.Decimal // = resting price
-    ExecutedQty     fixed.Decimal
-    RestingFull     bool // resting đã fill hết
-}
-
-func Match(book *OrderBook, incoming *Order, cmdSeq uint64) MatchResult {
-    var trades []TradeResult
-    matchIndex := 0
-
-    for !incoming.RemainingQty.IsZero() {
-        // Lấy best opposite
-        var bestPrice fixed.Decimal
-        var hasBest bool
-        if incoming.Side == SideBuy {
-            bestPrice, hasBest = book.Asks.BestPrice()
-        } else {
-            bestPrice, hasBest = book.Bids.BestPrice()
-        }
-
-        if !hasBest { break }
-
-        // Price cross check
-        if incoming.Side == SideBuy && incoming.Price.Cmp(bestPrice) < 0 { break }
-        if incoming.Side == SideSell && incoming.Price.Cmp(bestPrice) > 0 { break }
-
-        // Lấy resting order (FIFO front)
-        var level *PriceLevel
-        if incoming.Side == SideBuy {
-            level = book.Asks.levels[bestPrice.String()]
-        } else {
-            level = book.Bids.levels[bestPrice.String()]
-        }
-        resting := level.Front()
-
-        executedQty := fixed.Min(incoming.RemainingQty, resting.RemainingQty)
-        executionPrice := resting.Price // maker price
-
-        // Update quantities
-        incoming.RemainingQty = incoming.RemainingQty.Sub(executedQty)
-        resting.RemainingQty = resting.RemainingQty.Sub(executedQty)
-        level.TotalQuantity = level.TotalQuantity.Sub(executedQty)
-
-        restingFull := resting.RemainingQty.IsZero()
-        if restingFull {
-            level.Dequeue()
-            book.activeOrders[resting.OrderID] = nil
-            delete(book.activeOrders, resting.OrderID)
-            if level.IsEmpty() {
-                if incoming.Side == SideBuy {
-                    book.Asks.RemoveLevelIfEmpty(bestPrice)
-                } else {
-                    book.Bids.RemoveLevelIfEmpty(bestPrice)
-                }
-            }
-        }
-
-        trades = append(trades, TradeResult{
-            MatchIndex:      matchIndex,
-            RestingOrderID:  resting.OrderID,
-            IncomingOrderID: incoming.OrderID,
-            ExecutionPrice:  executionPrice,
-            ExecutedQty:     executedQty,
-            RestingFull:     restingFull,
-        })
-        matchIndex++
-    }
-
-    // Nếu còn remaining → add vào book
-    if !incoming.RemainingQty.IsZero() {
-        book.AddOrder(incoming)
-    }
-
-    return MatchResult{
-        Trades:       trades,
-        IncomingFull: incoming.RemainingQty.IsZero(),
-    }
-}
-```
-
----
-
-### F5. `internal/pair/engine.go` — PairEngine
-
-```go
-type PairEngine struct {
-    PairID                   string
-    Market                   string
-    State                    EngineState
-    Book                     *OrderBook
-    LastProcessedCmdSeq      uint64
-    LastTradeSequence        uint64
-    LastBookSequence         uint64
-    InFlight                 *InFlightBatch
-}
-
-type InFlightBatch struct {
-    CommandSequence uint64
-    Events          []message.EventEnvelope
-}
-
-func (e *PairEngine) HandleOpenMarket(cmd OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope
-func (e *PairEngine) HandlePlaceOrder(cmd PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope
-func (e *PairEngine) HandleCancelOrder(cmd CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope
-
-// Sequence validation
-func (e *PairEngine) validateSeq(cmdSeq uint64) error {
-    expected := e.LastProcessedCmdSeq + 1
-    if cmdSeq < expected {
-        return ErrDuplicateCommand // đã xử lý, skip
-    }
-    if cmdSeq > expected {
-        return ErrSequenceGap // block Pair
-    }
-    return nil
-}
-```
-
-**HandlePlaceOrder chi tiết:**
-
-```go
-func (e *PairEngine) HandlePlaceOrder(cmd PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
+func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope {
     if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
-        return nil // không mutate, không emit
+        return nil
     } else if err == ErrSequenceGap {
         e.State = StateFailed
-        return []EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", ...)}
+        return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
     }
+    e.State = StateReady
+    e.LastProcessedCmdSeq = cmdSeq
+    return []message.EventEnvelope{buildMarketOpened(e)}
+}
+```
 
+**`HandlePlaceOrder`** (fix syntax error + complete):
+
+```go
+func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
+    if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
+        return nil
+    } else if err == ErrSequenceGap {
+        e.State = StateFailed
+        return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
+    }
     if e.State != StateReady {
-        return []EventEnvelope{buildOrderRejected(cmd.OrderID, "MARKET_NOT_READY")}
+        return []message.EventEnvelope{buildOrderRejected(cmd, "MARKET_NOT_READY")}
     }
 
-    incoming := &Order{...} // parse từ cmd
+    incoming := &orderbook.Order{
+        OrderID: cmd.OrderID, UserID: cmd.UserID,
+        Side: cmd.Side, Price: cmd.Price,
+        OriginalQuantity: cmd.Quantity, RemainingQuantity: cmd.Quantity,
+        OrderSeq: cmd.OrderSeq,
+    }
+
     result := matching.Match(e.Book, incoming, cmdSeq)
+    var events []message.EventEnvelope
 
-    var events []EventEnvelope
-    tradeSeq := e.LastTradeSequence
-
-    // Build TradeCreated events
     for _, trade := range result.Trades {
-        tradeSeq++
+        e.LastTradeSequence++
         engineMatchId := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
-        events = append(events, buildTradeCreated(trade, tradeSeq, engineMatchId, cmdSeq, ...))
+        events = append(events, buildTradeCreated(e, trade, engineMatchId, cmdSeq))
     }
 
-    // OrderOpened — CHỈ khi incoming chưa full fill
     if !result.IncomingFull {
-        events = append(events, buildOrderOpened(cmd.OrderID, incoming.RemainingQty))
+        events = append(events, buildOrderOpened(e, cmd, incoming.RemainingQuantity))
     }
 
-    // OrderBookChanged — luôn emit sau PlaceOrder
     e.LastBookSequence++
     events = append(events, buildOrderBookChanged(e))
-
-    e.LastTradeSequence = tradeSeq
     e.LastProcessedCmdSeq = cmdSeq
     return events
 }
 ```
 
----
-
-### F6. `internal/transport/redis_consumer.go`
+**`HandleCancelOrder`:**
 
 ```go
-func (c *Consumer) Run(ctx context.Context) error {
-    // Đảm bảo consumer group tồn tại
-    c.redis.XGroupCreateMkStream(ctx, "stream:engine:commands", "matching-engine-v1", "$")
-
-    for {
-        select {
-        case <-ctx.Done():
-            return nil
-        default:
-        }
-
-        results, err := c.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
-            Group:    "matching-engine-v1",
-            Consumer: "engine-1",
-            Streams:  []string{"stream:engine:commands", ">"},
-            Count:    10,
-            Block:    200 * time.Millisecond,
-        }).Result()
-
-        if err == redis.Nil { continue } // no messages
-        if err != nil { /* log, sleep, retry */ continue }
-
-        for _, stream := range results {
-            for _, msg := range stream.Messages {
-                c.handleCommand(ctx, msg)
-            }
-        }
+func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope {
+    if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
+        return nil
+    } else if err == ErrSequenceGap {
+        e.State = StateFailed
+        return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
     }
-}
-
-func (c *Consumer) handleCommand(ctx context.Context, msg redis.XMessage) {
-    envelope := parseEnvelope(msg.Values)
-
-    // Tìm hoặc tạo PairEngine cho tradingPairId
-    engine := c.getOrCreateEngine(envelope.PartitionKey)
-
-    // Dispatch
-    var events []EventEnvelope
-    switch envelope.MessageType {
-    case "OpenMarket":  events = engine.HandleOpenMarket(...)
-    case "PlaceOrder":  events = engine.HandlePlaceOrder(...)
-    case "CancelOrder": events = engine.HandleCancelOrder(...)
+    if e.State != StateReady {
+        return []message.EventEnvelope{buildCancelOrderRejected(cmd, "MARKET_NOT_READY")}
     }
 
-    if len(events) == 0 { // duplicate command
-        c.redis.XAck(ctx, "stream:engine:commands", "matching-engine-v1", msg.ID)
-        return
+    order, ok := e.Book.ActiveOrders[cmd.OrderID]
+    if !ok {
+        return []message.EventEnvelope{buildCancelOrderRejected(cmd, "ORDER_NOT_FOUND")}
     }
 
-    // Store InFlightBatch
-    engine.InFlight = &InFlightBatch{Events: events}
+    e.Book.RemoveOrder(cmd.OrderID)
+    e.LastBookSequence++
+    e.LastProcessedCmdSeq = cmdSeq
 
-    // Publish event batch → PHẢI thành công trước khi ACK
-    if err := c.publisher.PublishBatch(ctx, events); err != nil {
-        // KHÔNG ACK — retry tự động khi redeliver
-        return
+    return []message.EventEnvelope{
+        buildOrderCancelled(e, cmd, order.RemainingQuantity),
+        buildOrderBookChanged(e),
     }
-
-    // ACK SAU publish thành công
-    c.redis.XAck(ctx, "stream:engine:commands", "matching-engine-v1", msg.ID)
-    engine.InFlight = nil
 }
 ```
 
-**`internal/publisher/redis_publisher.go`:**
+Also need event builder functions in `pair/events.go`:
+
+- `buildMarketOpened`, `buildEngineFailed`, `buildOrderRejected`
+- `buildTradeCreated`, `buildOrderOpened`, `buildOrderBookChanged`
+- `buildOrderCancelled`, `buildCancelOrderRejected`
+
+---
+
+### STEP 3 — Create `internal/publisher/redis_publisher.go`
 
 ```go
-func (p *Publisher) PublishBatch(ctx context.Context, events []EventEnvelope) error {
-    pipe := p.redis.Pipeline()
+package publisher
+
+import (
+    "context"
+    "encoding/json"
+    "github.com/redis/go-redis/v9"
+    "github.com/TrVHau/.../message"
+)
+
+type Publisher struct { client *redis.Client }
+
+func New(client *redis.Client) *Publisher { return &Publisher{client: client} }
+
+func (p *Publisher) PublishBatch(ctx context.Context, events []message.EventEnvelope) error {
+    pipe := p.client.Pipeline()
     for _, ev := range events {
         payload, _ := json.Marshal(ev.Payload)
         pipe.XAdd(ctx, &redis.XAddArgs{
@@ -860,13 +203,41 @@ func (p *Publisher) PublishBatch(ctx context.Context, events []EventEnvelope) er
 
 ---
 
-### F7. `cmd/engine/main.go`
+### STEP 4 — Create `internal/transport/redis_consumer.go`
+
+```go
+package transport
+
+type Consumer struct {
+    redis     *redis.Client
+    publisher *publisher.Publisher
+    engines   map[string]*pair.PairEngine // pairId → engine
+}
+
+func (c *Consumer) Run(ctx context.Context) error {
+    // 1. XGROUP CREATE stream:engine:commands matching-engine-v1 $ MKSTREAM
+    // 2. XREADGROUP loop → parse envelope → dispatch to PairEngine
+    // 3. Publish events → XACK
+}
+
+func (c *Consumer) dispatch(ctx context.Context, msg redis.XMessage) {
+    // Parse partitionKey as pairId
+    // Get or create PairEngine for pairId
+    // Parse messageType → route to HandleOpenMarket / HandlePlaceOrder / HandleCancelOrder
+    // Publish event batch
+    // XACK
+}
+```
+
+---
+
+### STEP 5 — Complete `cmd/engine/main.go`
 
 ```go
 func main() {
     redisClient := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_URL")})
-    publisher := publisher.New(redisClient)
-    consumer := transport.NewConsumer(redisClient, publisher)
+    pub := publisher.New(redisClient)
+    consumer := transport.New(redisClient, pub)
 
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
@@ -875,16 +246,157 @@ func main() {
     if err := consumer.Run(ctx); err != nil {
         log.Fatal(err)
     }
-    log.Println("Matching Engine stopped")
+}
+```
+
+**Verify:** `go build ./...` must pass with 0 errors.
+
+---
+
+### STEP 6 — Fix `open-market.bootstrap.service.ts`
+
+Current file body is `async;k` — completely broken. Rewrite:
+
+```typescript
+@Injectable()
+export class OpenMarketBootstrapService implements OnApplicationBootstrap {
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject("REDIS_CLIENT") private readonly redis: Redis,
+  ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    const pairs = await this.prisma.tradingPair.findMany({
+      where: { status: { not: TradingPairStatus.READY } },
+    });
+
+    for (const pair of pairs) {
+      const existing = await this.prisma.outboxEvent.findFirst({
+        where: {
+          messageType: "OpenMarket",
+          partitionKey: pair.id,
+          status: { in: [OutboxStatus.PENDING, OutboxStatus.PUBLISHED] },
+        },
+      });
+      if (existing) continue;
+
+      const cmdSeq = await nextCommandSequence(this.prisma as any, pair.id);
+      await this.prisma.outboxEvent.create({
+        data: {
+          messageId: uuidv7(),
+          version: 1,
+          correlationId: uuidv7(),
+          streamName: "stream:engine:commands",
+          messageType: "OpenMarket",
+          partitionKey: pair.id,
+          commandSequence: cmdSeq,
+          occurredAt: new Date(),
+          payload: {
+            tradingPairId: pair.id,
+            market: pair.symbol,
+            baseAssetId: pair.baseAssetId,
+            quoteAssetId: pair.quoteAssetId,
+            pricePrecision: 18,
+            quantityPrecision: 18,
+            tickSize: pair.tickSize.toFixed(18),
+            stepSize: pair.stepSize.toFixed(18),
+            minQuantity: pair.minQuantity.toFixed(18),
+            minNotional: pair.minNotional.toFixed(18),
+            openedAt: new Date().toISOString(),
+          },
+        },
+      });
+      this.logger.log(`Created OpenMarket outbox for pair: ${pair.symbol}`);
+    }
+  }
 }
 ```
 
 ---
 
-## Phần G — Docker Compose
+### STEP 7 — Implement `outbox-poller.service.ts`
+
+Core logic (currently empty file):
+
+```typescript
+@Injectable()
+export class OutboxPollerService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
+  private running = false;
+
+  async onApplicationBootstrap() {
+    this.running = true;
+    void this.pollLoop();
+  }
+
+  async onApplicationShutdown() {
+    this.running = false;
+  }
+
+  private async pollLoop() {
+    while (this.running) {
+      try {
+        await this.processBatch();
+      } catch (err) {
+        this.logger.error("Outbox poll error", err);
+      }
+      await sleep(100);
+    }
+  }
+
+  private async processBatch() {
+    // SELECT FOR UPDATE SKIP LOCKED (PENDING, nextRetryAt <= NOW)
+    // For each row: XADD to streamName → mark PUBLISHED
+    // On error: increment retryCount, set nextRetryAt, mark FAILED if retries >= 5
+  }
+}
+```
+
+---
+
+### STEP 8 — Create `modules/engine-events/engine-event-consumer.service.ts`
+
+```typescript
+// XREADGROUP GROUP backend-engine-events-v1 backend-1
+// STREAMS stream:engine:events >
+// Per message:
+//   1. INSERT processed_events ON CONFLICT DO NOTHING
+//   2. If 0 rows: check payloadHash → dead-letter if mismatch
+//   3. Switch messageType:
+//      MarketOpened  → UPDATE trading_pairs SET status='READY'
+//      OrderOpened   → UPDATE orders SET status='OPEN' WHERE status='PENDING'
+//      OrderRejected → UPDATE orders SET status='REJECTED' WHERE status='PENDING'
+//      EngineFailed  → UPDATE trading_pairs SET status='SUSPENDED'
+//      TradeCreated / OrderCancelled / OrderBookChanged → log + skip (Phase 7/9)
+//   4. XACK after commit
+```
+
+---
+
+### STEP 9 — Wire `worker.module.ts`
+
+```typescript
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: "../../.env" }),
+    PrismaModule,
+    RedisModule,
+  ],
+  providers: [
+    OpenMarketBootstrapService,
+    OutboxPollerService,
+    EngineEventConsumerService,
+  ],
+})
+export class WorkerModule {}
+```
+
+---
+
+### STEP 10 — Add Go Engine to `docker-compose.yml`
 
 ```yaml
-# Thêm vào docker-compose.yml
 matching-engine:
   build:
     context: ./services/matching-engine
@@ -892,11 +404,12 @@ matching-engine:
   environment:
     REDIS_URL: redis:6379
   depends_on:
-    - redis
+    redis:
+      condition: service_healthy
   restart: unless-stopped
 ```
 
-**`Dockerfile` (Go multi-stage):**
+Create `services/matching-engine/Dockerfile`:
 
 ```dockerfile
 FROM golang:1.23-alpine AS builder
@@ -914,67 +427,72 @@ CMD ["./engine"]
 
 ---
 
-## Thứ tự implement
+### STEP 11 — Go Unit Tests (matching correctness)
 
-```
-A. Backend Worker
-   1. pnpm add ioredis --filter backend
-   2. core/redis/redis.module.ts
-   3. modules/outbox/outbox-poller.service.ts
-   4. modules/engine/open-market-bootstrap.service.ts
-   5. modules/engine-events/engine-event-consumer.service.ts
-      (handlers: MarketOpened, OrderOpened, OrderRejected, EngineFailed)
-   6. Wire WorkerModule
+`internal/matching/matcher_test.go`:
 
-B. Go Matching Engine
-   7.  go mod init github.com/haucex/matching-engine
-   8.  internal/fixed/decimal.go + test
-   9.  internal/orderbook/ (Order, PriceLevel, SideBook, OrderBook) + test
-   10. internal/matching/matcher.go + test
-       (full fill, partial fill, FIFO, no match)
-   11. internal/message/ (command + event DTOs)
-   12. internal/pair/engine.go (PlaceOrder, CancelOrder, OpenMarket, sequence)
-   13. internal/publisher/redis_publisher.go
-   14. internal/transport/redis_consumer.go
-   15. cmd/engine/main.go
+- [ ] No match → OrderOpened only
+- [ ] Full fill → TradeCreated, no OrderOpened
+- [ ] Partial fill → TradeCreated + OrderOpened with correct remaining
+- [ ] FIFO priority — same price, earlier OrderSeq fills first
+- [ ] Price priority — better price fills first
+- [ ] Cancel existing order → removed from book
 
-C. Infrastructure
-   16. Thêm matching-engine vào docker-compose.yml
-   17. .env: REDIS_URL
+---
 
-D. Integration test
-   18. docker compose up
-   19. Chạy seed (pnpm db:seed)
-   20. Start Backend Worker
-   21. Verify TradingPair → READY (qua MarketOpened)
-   22. POST /orders → verify Order → OPEN (qua OrderOpened)
+### STEP 12 — Integration Test (manual)
+
+```bash
+# 1. docker compose up
+# 2. pnpm db:seed
+# 3. pnpm worker:dev (or nest start worker)
+# → Verify: trading_pairs.status = READY (after MarketOpened)
+# 4. POST /orders (place BUY)
+# → Verify: Order status = PENDING → OPEN (after OrderOpened)
+# 5. POST /orders (place matching SELL)
+# → Engine should emit TradeCreated (logged, not settled yet)
+# 6. POST /orders/:id/cancel
+# → Verify: Order status = CANCEL_PENDING → CANCELLED
 ```
 
 ---
 
-## Definition of Done
+## Priority Order (What to Do First)
 
-- [ ] `docker compose up` — PostgreSQL + Redis + Backend API + Backend Worker + Go Engine đều start
-- [ ] Bootstrap: TradingPair SUSPENDED → Outbox OpenMarket tự tạo khi Worker start
-- [ ] Outbox poller đẩy `OpenMarket` lên `stream:engine:commands`
-- [ ] Go Engine consume `OpenMarket` → publish `MarketOpened` lên `stream:engine:events`
-- [ ] Backend Worker consume `MarketOpened` → `TradingPair.status = READY`
-- [ ] `POST /orders` → Order `PENDING` + Outbox `PlaceOrder` (đã xong Phase 5)
-- [ ] Outbox poller đẩy `PlaceOrder` lên Redis
-- [ ] Go Engine consume `PlaceOrder` → publish `OrderOpened` (no match case)
-- [ ] Backend Worker consume `OrderOpened` → `Order.status = OPEN`
-- [ ] Duplicate `messageId` → skip, không xử lý lại
-- [ ] `COMMAND_SEQUENCE_GAP` → TradingPair SUSPENDED + log
-- [ ] Redis down → poller retry, không crash
-- [ ] Go unit test pass: Full Fill, Partial Fill, FIFO Priority, No Match, Cancel
-- [ ] TypeScript build clean
+```
+1. Fix go.mod (go 1.23, add redis/go-redis)          [5 min]
+2. Add MessageEnvelope alias in envelope.go            [2 min]
+3. Complete pair/engine.go (3 handlers + event builders) [2–3 hrs]
+4. Create internal/publisher/ and internal/transport/  [2–3 hrs]
+5. Fix main.go                                         [30 min]
+6. go build ./... → must pass                          [verify]
+7. Fix open-market.bootstrap.service.ts                [30 min]
+8. Implement outbox-poller.service.ts                  [1–2 hrs]
+9. Create engine-event-consumer.service.ts             [1–2 hrs]
+10. Wire worker.module.ts                              [10 min]
+11. tsc --noEmit → must pass                           [verify]
+12. Add matching-engine to docker-compose.yml          [15 min]
+13. Go unit tests                                      [1–2 hrs]
+14. Integration test                                   [30 min]
+```
 
 ---
 
-## Notes
+## Phase 7 Preview (After Phase 6 Done)
 
-> `TradeCreated` consumer (settlement) → **Phase 7**. Phase 6 chỉ log/skip TradeCreated.
+Phase 7 = Trade Settlement. The `TradeCreated` consumer (currently skipped) will:
 
-> `OrderBookChanged` consumer (realtime) → **Phase 9**. Phase 6 chỉ log/skip.
+1. Lock Buy + Sell order rows (by id ASC to avoid deadlock)
+2. Lock Buyer + Seller + Treasury wallets (by id ASC)
+3. Calculate: `quoteAmount = executionPrice × executedQuantity`
+4. Calculate fees (buyer pays in Base, seller pays in Quote)
+5. Price improvement refund for maker
+6. `INSERT INTO trades`
+7. `UPDATE orders` (filledQuantity, remainingQuantity, remainingLockedAmount, status)
+8. `UPDATE wallets` (available/locked balances)
+9. `INSERT INTO ledger_entries` (TRADE_SETTLEMENT + TRADING_FEE per side)
+10. `INSERT INTO outbox_events` (TradeSettled, OrderUpdated, BalanceUpdated domain events)
+11. `INSERT INTO processed_events`
+12. Commit → XACK
 
-> Go Engine là **stateless qua restart** — sau restart, pending list của Redis consumer group sẽ tự redeliver các command chưa ACK.
+**Idempotency key:** `engineMatchId` (unique constraint on `trades` table)

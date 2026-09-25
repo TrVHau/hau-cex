@@ -12,3 +12,5 @@ type EventEnvelope struct {
 	CommandSequence string    `json:"commandSequence,omitempty"`
 	Payload         any       `json:"payload"`
 }
+
+type MessageEnvelope = EventEnvelope
