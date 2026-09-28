@@ -1,322 +1,151 @@
-# Next Steps Plan — Phase 6 Completion & Phase 7 Preparation
+# Next Steps Plan — Full Audit (2026-09-27)
 
-## Current State Audit
+## Tổng quan hiện trạng
 
-### ✅ Done & Buildable
-
-| Component                                     | Status                  |
-| --------------------------------------------- | ----------------------- |
-| Backend API (Auth, Wallet, Ledger, Order API) | ✅ Builds clean         |
-| Prisma Schema (all models)                    | ✅ Complete             |
-| Seed (sequences, trading pairs, wallets)      | ✅ Complete             |
-| `RedisModule` (NestJS)                        | ✅ Done                 |
-| `OrderBook` data structures (Go)              | ✅ Done                 |
-| `Matcher` algorithm (Go)                      | ✅ Done (logic correct) |
-| `fixed.Decimal` (Go)                          | ✅ Done                 |
-| Docker Compose (Postgres + Redis)             | ✅ Done                 |
-
-### ❌ Broken / Incomplete — Must Fix Before Anything Else
-
-#### Go Engine (`services/matching-engine`)
-
-| File                           | Issue                                                                                                                                       |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cmd/engine/main.go`           | `redis` and `consumer` packages imported but undefined — **compile error**                                                                  |
-| `internal/pair/engine.go`      | `HandleOpenMarket` body empty, `HandlePlaceOrder` has syntax error (`buil` incomplete), `HandleCancelOrder` has no body — **compile error** |
-| `internal/message/envelope.go` | Only `EventEnvelope` defined — missing `MessageEnvelope` (used by `pair/engine.go`)                                                         |
-| Missing packages               | `internal/publisher/`, `internal/transport/` don't exist yet                                                                                |
-| `go.mod`                       | `go 1.26.4` invalid (Go 1.26 doesn't exist) — should be `1.23`                                                                              |
-
-#### Backend Worker (NestJS)
-
-| File                                              | Issue                                                                                              |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `modules/engine/open-market.bootstrap.service.ts` | Body is `async;k` — **compile error**, completely broken                                           |
-| `modules/outbox/outbox-poller.service.ts`         | **Empty file** — nothing implemented                                                               |
-| `worker.module.ts`                                | Still bare skeleton — `RedisModule`, `OutboxPollerService`, `OpenMarketBootstrapService` NOT wired |
-| `modules/engine-events/`                          | **Directory doesn't exist** — `EngineEventConsumerService` not created                             |
+| Sub-project                        | Build | Runtime | Notes                                |
+| ---------------------------------- | ----- | ------- | ------------------------------------ |
+| Backend API (Auth, Wallet, Orders) | ✅    | ✅      | Fully functional                     |
+| Backend Worker                     | ❌    | ❌      | Won't compile; no logic              |
+| Go Matching Engine                 | ❌    | ❌      | Builds but does nothing              |
+| Smart Contracts                    | ✅    | ✅      | Tests pass                           |
+| Docker Compose                     | ✅    | ⚠️      | Postgres+Redis only; no app services |
 
 ---
 
-## Step-by-Step Plan
+## 🔴 Critical Blockers (8) — App cannot function
 
----
+### B1 — `price_heap.go`: `Swap()` value receiver → heap broken
 
-### STEP 1 — Fix Go `go.mod` and `message` package
+**File:** `services/matching-engine/internal/orderbook/price_heap.go`
 
-**`go.mod`** — fix Go version:
+`Swap` is defined on a value receiver. The `container/heap` package requires a pointer receiver to mutate the slice. The heap **never maintains its invariant** — `BestPrice()` returns wrong values, matching produces incorrect trades.
 
-```
-go 1.23
-```
-
-Then add Redis dependency:
-
-```bash
-go get github.com/redis/go-redis/v9
-go get github.com/google/uuid
-```
-
-**`internal/message/envelope.go`** — add `MessageEnvelope` alias (engine.go references it):
+**Fix:**
 
 ```go
-// MessageEnvelope = EventEnvelope (rename for clarity or alias)
-type MessageEnvelope = EventEnvelope
+// WRONG
+func (h PriceHeap) Swap(i, j int) { h.levels[i], h.levels[j] = h.levels[j], h.levels[i] }
+
+// CORRECT
+func (h *PriceHeap) Swap(i, j int) { h.levels[i], h.levels[j] = h.levels[j], h.levels[i] }
 ```
 
 ---
 
-### STEP 2 — Complete `internal/pair/engine.go`
+### B2 — `transport/redis_customer.go`: `Run()` returns immediately; `dispatch()` is empty
 
-Three handlers need full implementation:
+**File:** `services/matching-engine/internal/transport/redis_customer.go`
 
-**`HandleOpenMarket`:**
+`Run()` is a stub returning `nil`. Engine starts and exits immediately — zero messages processed.
 
-```go
-func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope {
-    if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
-        return nil
-    } else if err == ErrSequenceGap {
-        e.State = StateFailed
-        return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
-    }
-    e.State = StateReady
-    e.LastProcessedCmdSeq = cmdSeq
-    return []message.EventEnvelope{buildMarketOpened(e)}
-}
-```
+**Must implement:**
 
-**`HandlePlaceOrder`** (fix syntax error + complete):
-
-```go
-func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
-    if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
-        return nil
-    } else if err == ErrSequenceGap {
-        e.State = StateFailed
-        return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
-    }
-    if e.State != StateReady {
-        return []message.EventEnvelope{buildOrderRejected(cmd, "MARKET_NOT_READY")}
-    }
-
-    incoming := &orderbook.Order{
-        OrderID: cmd.OrderID, UserID: cmd.UserID,
-        Side: cmd.Side, Price: cmd.Price,
-        OriginalQuantity: cmd.Quantity, RemainingQuantity: cmd.Quantity,
-        OrderSeq: cmd.OrderSeq,
-    }
-
-    result := matching.Match(e.Book, incoming, cmdSeq)
-    var events []message.EventEnvelope
-
-    for _, trade := range result.Trades {
-        e.LastTradeSequence++
-        engineMatchId := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
-        events = append(events, buildTradeCreated(e, trade, engineMatchId, cmdSeq))
-    }
-
-    if !result.IncomingFull {
-        events = append(events, buildOrderOpened(e, cmd, incoming.RemainingQuantity))
-    }
-
-    e.LastBookSequence++
-    events = append(events, buildOrderBookChanged(e))
-    e.LastProcessedCmdSeq = cmdSeq
-    return events
-}
-```
-
-**`HandleCancelOrder`:**
-
-```go
-func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope {
-    if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
-        return nil
-    } else if err == ErrSequenceGap {
-        e.State = StateFailed
-        return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
-    }
-    if e.State != StateReady {
-        return []message.EventEnvelope{buildCancelOrderRejected(cmd, "MARKET_NOT_READY")}
-    }
-
-    order, ok := e.Book.ActiveOrders[cmd.OrderID]
-    if !ok {
-        return []message.EventEnvelope{buildCancelOrderRejected(cmd, "ORDER_NOT_FOUND")}
-    }
-
-    e.Book.RemoveOrder(cmd.OrderID)
-    e.LastBookSequence++
-    e.LastProcessedCmdSeq = cmdSeq
-
-    return []message.EventEnvelope{
-        buildOrderCancelled(e, cmd, order.RemainingQuantity),
-        buildOrderBookChanged(e),
-    }
-}
-```
-
-Also need event builder functions in `pair/events.go`:
-
-- `buildMarketOpened`, `buildEngineFailed`, `buildOrderRejected`
-- `buildTradeCreated`, `buildOrderOpened`, `buildOrderBookChanged`
-- `buildOrderCancelled`, `buildCancelOrderRejected`
+1. `XGROUP CREATE stream:engine:commands matching-engine-v1 $ MKSTREAM` (idempotent)
+2. `XREADGROUP GROUP matching-engine-v1 engine-1 COUNT 10 BLOCK 200ms STREAMS stream:engine:commands >`
+3. Parse message fields → unmarshal `commandSeq`, `messageType`, `payload`
+4. `dispatch()`: route by messageType → `HandleOpenMarket` / `HandlePlaceOrder` / `HandleCancelOrder`
+5. `PublishBatch()` events → `XACK` only after successful publish
+6. Get-or-create `PairEngine` by `partitionKey` (tradingPairId)
 
 ---
 
-### STEP 3 — Create `internal/publisher/redis_publisher.go`
+### B3 — `pair/events.go`: ALL 8 builder functions return `EventEnvelope{}`
+
+**File:** `services/matching-engine/internal/pair/events.go`
+
+Every single event builder returns an empty struct. Events published to Redis have no `messageId`, no `messageType`, empty payload. Backend worker receives garbage.
+
+**Each builder must set:**
+
+- `MessageID`: `uuid.New().String()`
+- `MessageType`: e.g., `"MarketOpened"`, `"OrderOpened"`, `"TradeCreated"`, etc.
+- `Version`: `1`
+- `CorrelationID`: `uuid.New().String()`
+- `OccurredAt`: `time.Now().UTC()`
+- `PartitionKey`: `e.PairID`
+- `CommandSequence`: `strconv.FormatUint(cmdSeq, 10)` (where applicable)
+- `Payload`: event-specific struct (see below)
+
+**Payload structs needed (add to `message/` package):**
 
 ```go
-package publisher
-
-import (
-    "context"
-    "encoding/json"
-    "github.com/redis/go-redis/v9"
-    "github.com/TrVHau/.../message"
-)
-
-type Publisher struct { client *redis.Client }
-
-func New(client *redis.Client) *Publisher { return &Publisher{client: client} }
-
-func (p *Publisher) PublishBatch(ctx context.Context, events []message.EventEnvelope) error {
-    pipe := p.client.Pipeline()
-    for _, ev := range events {
-        payload, _ := json.Marshal(ev.Payload)
-        pipe.XAdd(ctx, &redis.XAddArgs{
-            Stream: "stream:engine:events",
-            Values: map[string]any{
-                "messageId":    ev.MessageID,
-                "messageType":  ev.MessageType,
-                "partitionKey": ev.PartitionKey,
-                "commandSeq":   ev.CommandSequence,
-                "payload":      string(payload),
-            },
-        })
-    }
-    _, err := pipe.Exec(ctx)
-    return err
+type MarketOpenedPayload struct {
+    TradingPairID string    `json:"tradingPairId"`
+    Market        string    `json:"market"`
+    OpenedAt      time.Time `json:"openedAt"`
+}
+type OrderOpenedPayload struct {
+    TradingPairID     string `json:"tradingPairId"`
+    Market            string `json:"market"`
+    OrderID           string `json:"orderId"`
+    RemainingQuantity string `json:"remainingQuantity"`
+    OpenedAt          time.Time `json:"openedAt"`
+}
+type TradeCreatedPayload struct {
+    TradeID                    string    `json:"tradeId"`
+    EngineMatchID              string    `json:"engineMatchId"`
+    TradingPairID              string    `json:"tradingPairId"`
+    Market                     string    `json:"market"`
+    TradeSequence              string    `json:"tradeSequence"`
+    MatchIndex                 int       `json:"matchIndex"`
+    BuyOrderID                 string    `json:"buyOrderId"`
+    SellOrderID                string    `json:"sellOrderId"`
+    MakerOrderID               string    `json:"makerOrderId"`
+    TakerOrderID               string    `json:"takerOrderId"`
+    TakerSide                  string    `json:"takerSide"`
+    ExecutionPrice             string    `json:"executionPrice"`
+    ExecutedQuantity           string    `json:"executedQuantity"`
+    BuyOrderRemainingQuantity  string    `json:"buyOrderRemainingQuantity"`
+    SellOrderRemainingQuantity string    `json:"sellOrderRemainingQuantity"`
+    MatchedAt                  time.Time `json:"matchedAt"`
+}
+type OrderCancelledPayload struct {
+    TradingPairID     string    `json:"tradingPairId"`
+    Market            string    `json:"market"`
+    OrderID           string    `json:"orderId"`
+    CancelledQuantity string    `json:"cancelledQuantity"`
+    CancelledAt       time.Time `json:"cancelledAt"`
+}
+type EnginFailedPayload struct {
+    TradingPairID  string    `json:"tradingPairId"`
+    Market         string    `json:"market"`
+    FailureCode    string    `json:"failureCode"`
+    FailureMessage string    `json:"failureMessage"`
+    FailedAt       time.Time `json:"failedAt"`
+}
+type OrderBookChangedPayload struct {
+    TradingPairID string          `json:"tradingPairId"`
+    Market        string          `json:"market"`
+    BookSequence  string          `json:"bookSequence"`
+    Bids          [][3]string     `json:"bids"` // [price, totalQty, count]
+    Asks          [][3]string     `json:"asks"`
+    ChangedAt     time.Time       `json:"changedAt"`
+}
+type OrderRejectedPayload struct {
+    TradingPairID string    `json:"tradingPairId"`
+    Market        string    `json:"market"`
+    OrderID       string    `json:"orderId"`
+    ReasonCode    string    `json:"reasonCode"`
+    Reason        string    `json:"reason"`
+    RejectedAt    time.Time `json:"rejectedAt"`
+}
+type CancelOrderRejectedPayload struct {
+    TradingPairID string    `json:"tradingPairId"`
+    Market        string    `json:"market"`
+    OrderID       string    `json:"orderId"`
+    ReasonCode    string    `json:"reasonCode"`
+    Reason        string    `json:"reason"`
+    RejectedAt    time.Time `json:"rejectedAt"`
 }
 ```
 
 ---
 
-### STEP 4 — Create `internal/transport/redis_consumer.go`
+### B4 — `outbox-poller.service.ts`: completely empty file
 
-```go
-package transport
+**File:** `apps/backend/src/modules/outbox/outbox-poller.service.ts`
 
-type Consumer struct {
-    redis     *redis.Client
-    publisher *publisher.Publisher
-    engines   map[string]*pair.PairEngine // pairId → engine
-}
-
-func (c *Consumer) Run(ctx context.Context) error {
-    // 1. XGROUP CREATE stream:engine:commands matching-engine-v1 $ MKSTREAM
-    // 2. XREADGROUP loop → parse envelope → dispatch to PairEngine
-    // 3. Publish events → XACK
-}
-
-func (c *Consumer) dispatch(ctx context.Context, msg redis.XMessage) {
-    // Parse partitionKey as pairId
-    // Get or create PairEngine for pairId
-    // Parse messageType → route to HandleOpenMarket / HandlePlaceOrder / HandleCancelOrder
-    // Publish event batch
-    // XACK
-}
-```
-
----
-
-### STEP 5 — Complete `cmd/engine/main.go`
-
-```go
-func main() {
-    redisClient := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_URL")})
-    pub := publisher.New(redisClient)
-    consumer := transport.New(redisClient, pub)
-
-    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-    defer cancel()
-
-    log.Println("Matching Engine started")
-    if err := consumer.Run(ctx); err != nil {
-        log.Fatal(err)
-    }
-}
-```
-
-**Verify:** `go build ./...` must pass with 0 errors.
-
----
-
-### STEP 6 — Fix `open-market.bootstrap.service.ts`
-
-Current file body is `async;k` — completely broken. Rewrite:
-
-```typescript
-@Injectable()
-export class OpenMarketBootstrapService implements OnApplicationBootstrap {
-  constructor(
-    private readonly prisma: PrismaService,
-    @Inject("REDIS_CLIENT") private readonly redis: Redis,
-  ) {}
-
-  async onApplicationBootstrap(): Promise<void> {
-    const pairs = await this.prisma.tradingPair.findMany({
-      where: { status: { not: TradingPairStatus.READY } },
-    });
-
-    for (const pair of pairs) {
-      const existing = await this.prisma.outboxEvent.findFirst({
-        where: {
-          messageType: "OpenMarket",
-          partitionKey: pair.id,
-          status: { in: [OutboxStatus.PENDING, OutboxStatus.PUBLISHED] },
-        },
-      });
-      if (existing) continue;
-
-      const cmdSeq = await nextCommandSequence(this.prisma as any, pair.id);
-      await this.prisma.outboxEvent.create({
-        data: {
-          messageId: uuidv7(),
-          version: 1,
-          correlationId: uuidv7(),
-          streamName: "stream:engine:commands",
-          messageType: "OpenMarket",
-          partitionKey: pair.id,
-          commandSequence: cmdSeq,
-          occurredAt: new Date(),
-          payload: {
-            tradingPairId: pair.id,
-            market: pair.symbol,
-            baseAssetId: pair.baseAssetId,
-            quoteAssetId: pair.quoteAssetId,
-            pricePrecision: 18,
-            quantityPrecision: 18,
-            tickSize: pair.tickSize.toFixed(18),
-            stepSize: pair.stepSize.toFixed(18),
-            minQuantity: pair.minQuantity.toFixed(18),
-            minNotional: pair.minNotional.toFixed(18),
-            openedAt: new Date().toISOString(),
-          },
-        },
-      });
-      this.logger.log(`Created OpenMarket outbox for pair: ${pair.symbol}`);
-    }
-  }
-}
-```
-
----
-
-### STEP 7 — Implement `outbox-poller.service.ts`
-
-Core logic (currently empty file):
+Without this, **no commands ever reach the Go engine**. Must implement:
 
 ```typescript
 @Injectable()
@@ -329,7 +158,6 @@ export class OutboxPollerService
     this.running = true;
     void this.pollLoop();
   }
-
   async onApplicationShutdown() {
     this.running = false;
   }
@@ -339,77 +167,264 @@ export class OutboxPollerService
       try {
         await this.processBatch();
       } catch (err) {
-        this.logger.error("Outbox poll error", err);
+        this.logger.error("poll error", err);
       }
-      await sleep(100);
+      await new Promise((r) => setTimeout(r, 100));
     }
   }
 
   private async processBatch() {
-    // SELECT FOR UPDATE SKIP LOCKED (PENDING, nextRetryAt <= NOW)
-    // For each row: XADD to streamName → mark PUBLISHED
-    // On error: increment retryCount, set nextRetryAt, mark FAILED if retries >= 5
+    await this.prisma.$transaction(async (tx) => {
+      const rows: OutboxRow[] = await tx.$queryRaw`
+        SELECT id, message_id, stream_name, partition_key,
+               command_sequence, message_type, payload, retry_count
+        FROM outbox_events
+        WHERE status = 'PENDING'
+          AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+        ORDER BY command_sequence ASC NULLS LAST, created_at ASC
+        LIMIT 50
+        FOR UPDATE SKIP LOCKED
+      `;
+
+      for (const row of rows) {
+        try {
+          await this.redis.xadd(
+            row.stream_name,
+            "*",
+            "messageId",
+            row.message_id,
+            "messageType",
+            row.message_type,
+            "partitionKey",
+            row.partition_key ?? "",
+            "commandSeq",
+            row.command_sequence?.toString() ?? "",
+            "payload",
+            JSON.stringify(row.payload),
+          );
+          await tx.$executeRaw`
+            UPDATE outbox_events SET status = 'PUBLISHED', published_at = NOW()
+            WHERE id = ${row.id}::uuid
+          `;
+        } catch (err) {
+          const delay = [1, 2, 4, 8, 16][row.retry_count] ?? 30;
+          await tx.$executeRaw`
+            UPDATE outbox_events
+            SET retry_count = retry_count + 1,
+                last_error  = ${String(err)},
+                next_retry_at = NOW() + INTERVAL '${delay} seconds',
+                status = CASE WHEN retry_count + 1 >= 5 THEN 'FAILED'::outbox_status ELSE status END
+            WHERE id = ${row.id}::uuid
+          `;
+        }
+      }
+    });
   }
 }
 ```
 
 ---
 
-### STEP 8 — Create `modules/engine-events/engine-event-consumer.service.ts`
+### B5 — `open-market.bootstrap.service.ts`: syntax error + empty body
 
-```typescript
-// XREADGROUP GROUP backend-engine-events-v1 backend-1
-// STREAMS stream:engine:events >
-// Per message:
-//   1. INSERT processed_events ON CONFLICT DO NOTHING
-//   2. If 0 rows: check payloadHash → dead-letter if mismatch
-//   3. Switch messageType:
-//      MarketOpened  → UPDATE trading_pairs SET status='READY'
-//      OrderOpened   → UPDATE orders SET status='OPEN' WHERE status='PENDING'
-//      OrderRejected → UPDATE orders SET status='REJECTED' WHERE status='PENDING'
-//      EngineFailed  → UPDATE trading_pairs SET status='SUSPENDED'
-//      TradeCreated / OrderCancelled / OrderBookChanged → log + skip (Phase 7/9)
-//   4. XACK after commit
+**File:** `apps/backend/src/modules/engine/open-market.bootstrap.service.ts`
+
+`async;k` is invalid TypeScript — won't compile. Entire class body missing.
+
+Must implement `onApplicationBootstrap()` to:
+
+1. Find all `TradingPair` where `status != READY`
+2. For each pair, check if an `OPEN_MARKET` outbox event already exists (idempotency)
+3. If not, call `nextCommandSequence(prisma, pair.id)` and create the outbox record
+
+---
+
+### B6 — `schema.prisma`: missing `url` in datasource
+
+**File:** `apps/backend/prisma/schema.prisma`
+
+`datasource db` block is missing `url = env("DATABASE_URL")`. `prisma migrate` and `prisma generate` will fail without it.
+
+**Fix:**
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 ```
 
 ---
 
-### STEP 9 — Wire `worker.module.ts`
+### B7 — `message/command.go`: `OpenMarketCommand` fields unexported
+
+**File:** `services/matching-engine/internal/message/command.go`
+
+`tradingPairID`, `market`, `tickSize` are unexported. JSON deserialization from Redis will silently set them to zero values.
+
+Also: typo `RequestdBy` → should be `RequestedBy`.
+
+**Fix:** Export all fields and add `json:` struct tags:
+
+```go
+type OpenMarketCommand struct {
+    TradingPairID  string        `json:"tradingPairId"`
+    Market         string        `json:"market"`
+    TickSize       fixed.Decimal `json:"tickSize"`
+    MinQuantity    fixed.Decimal `json:"minQuantity"`
+    MinNotional    fixed.Decimal `json:"minNotional"`
+}
+type CancelOrderCommand struct {
+    TradingPairID string `json:"tradingPairId"`
+    Market        string `json:"market"`
+    OrderID       string `json:"orderId"`
+    UserID        string `json:"userId"`
+    RequestedBy   string `json:"requestedBy"`
+}
+```
+
+Also: all command structs need `json:` tags on all fields.
+
+---
+
+### B8 — `main.go`: `REDIS_URL` used as `Addr` (URL vs host:port)
+
+**File:** `services/matching-engine/cmd/engine/main.go`
+
+`go-redis` `Addr` expects `host:port`, not a `redis://...` URL. If env var is `redis://localhost:6379`, the client silently fails to connect.
+
+**Fix — option A** (parse URL):
+
+```go
+opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
+if err != nil { log.Fatal(err) }
+redisClient := redis.NewClient(opt)
+```
+
+**Fix — option B** (use separate `REDIS_ADDR` env var):
+
+```go
+redisClient := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_ADDR")})
+```
+
+---
+
+## 🟠 High — Logic bugs
+
+### H1 — `orders.service.ts`: messageType case mismatch
+
+`placeOrder` writes `messageType: 'PlaceOrder'` but Go engine constant is `"PLACE_ORDER"`. Same for `CancelOrder` / `"CANCEL_ORDER"`.
+
+**Fix:** Standardize to camelCase `"PlaceOrder"`, `"CancelOrder"`, `"OpenMarket"` — update both Go constants in `command.go` AND the transport dispatch switch.
+
+> The spec (`09-internal-message-contract.md`) uses PascalCase: `PlaceOrder`, `CancelOrder`, `OpenMarket`. **NestJS is correct. Go constants must change.**
+
+```go
+// command.go — fix constants
+const (
+    CommandOpenMarket    CommandType = "OpenMarket"
+    CommandPlaceOrder    CommandType = "PlaceOrder"
+    CommandCancelOrder   CommandType = "CancelOrder"
+)
+```
+
+### H2 — `fixed/decimal.go`: nil pointer panic on zero-value `Decimal{}`
+
+Any `Decimal{}` without `Zero()` has `raw = nil`. Calling `.IsZero()`, `.Add()`, `.Cmp()`, `.String()` will panic.
+
+**Fix:** Add nil guard in all methods:
+
+```go
+func (d Decimal) IsZero() bool {
+    return d.raw == nil || d.raw.Sign() == 0
+}
+func (d Decimal) Add(other Decimal) Decimal {
+    a := d.raw; if a == nil { a = big.NewInt(0) }
+    b := other.raw; if b == nil { b = big.NewInt(0) }
+    return Decimal{raw: new(big.Int).Add(a, b)}
+}
+// etc.
+```
+
+Also add `Mul` for fee/notional calculation (needed in Phase 7):
+
+```go
+func (d Decimal) Mul(other Decimal) Decimal {
+    r := new(big.Int).Mul(d.raw, other.raw)
+    r.Div(r, scaleInt) // scale down by 10^18
+    return Decimal{raw: r}
+}
+```
+
+### H3 — `pair/engine.go`: `InFlightBatch` defined but never used
+
+`InFlight *InFlightBatch` field exists for retry-on-crash semantics, but the transport layer never reads it. Either implement or remove.
+
+For MVP: implement in `dispatch()` — store events in `InFlight` before publishing, clear after XACK.
+
+---
+
+## 🟡 Medium — Refactoring / Quality
+
+### M1 — `worker.module.ts`: must wire providers
 
 ```typescript
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: "../../.env" }),
     PrismaModule,
-    RedisModule,
+    RedisModule, // ← ADD
   ],
   providers: [
-    OpenMarketBootstrapService,
-    OutboxPollerService,
-    EngineEventConsumerService,
+    OpenMarketBootstrapService, // ← ADD
+    OutboxPollerService, // ← ADD
+    EngineEventConsumerService, // ← ADD (new file, see below)
   ],
 })
 export class WorkerModule {}
 ```
 
----
+### M2 — `EngineEventConsumerService` doesn't exist yet
 
-### STEP 10 — Add Go Engine to `docker-compose.yml`
+Must create: `src/modules/engine-events/engine-event-consumer.service.ts`
 
-```yaml
-matching-engine:
-  build:
-    context: ./services/matching-engine
-    dockerfile: Dockerfile
-  environment:
-    REDIS_URL: redis:6379
-  depends_on:
-    redis:
-      condition: service_healthy
-  restart: unless-stopped
+Responsibilities:
+
+- `XREADGROUP GROUP backend-engine-events-v1 backend-1 STREAMS stream:engine:events >`
+- Per message: check `processed_events` idempotency → dispatch by `messageType`:
+  - `MarketOpened` → `UPDATE trading_pairs SET status='READY'`
+  - `OrderOpened` → `UPDATE orders SET status='OPEN' WHERE status='PENDING'`
+  - `OrderRejected` → `UPDATE orders SET status='REJECTED' WHERE status='PENDING'`
+  - `EngineFailed` → `UPDATE trading_pairs SET status='SUSPENDED'`
+  - `TradeCreated` / `OrderCancelled` / `OrderBookChanged` → **log + skip** (Phase 7/9)
+- `XACK` after commit
+
+### M3 — `matching/matcher.go`: unused `cmdSeq` parameter
+
+```go
+// Remove unused param — engine.go passes it but matcher doesn't need it
+func Match(book *orderbook.OrderBook, incoming *orderbook.Order) MatchResult {
 ```
 
-Create `services/matching-engine/Dockerfile`:
+### M4 — `side_book.go` + `price_heap.go`: inconsistent API
+
+- `GetLevels(price string)` vs `GetOrCreateLevel(price fixed.Decimal)` — standardize to `fixed.Decimal`
+- `side` field in `SideBook` is stored but never read — remove or use
+
+### M5 — `publisher.go`: silent `json.Marshal` error
+
+```go
+// Before
+payload, _ := json.Marshal(event.Payload)
+
+// After
+payload, err := json.Marshal(event.Payload)
+if err != nil {
+    return fmt.Errorf("marshal payload for %s: %w", event.MessageType, err)
+}
+```
+
+### M6 — Add `Dockerfile` for Go engine + add to `docker-compose.yml`
 
 ```dockerfile
 FROM golang:1.23-alpine AS builder
@@ -425,74 +440,119 @@ COPY --from=builder /app/engine .
 CMD ["./engine"]
 ```
 
----
-
-### STEP 11 — Go Unit Tests (matching correctness)
-
-`internal/matching/matcher_test.go`:
-
-- [ ] No match → OrderOpened only
-- [ ] Full fill → TradeCreated, no OrderOpened
-- [ ] Partial fill → TradeCreated + OrderOpened with correct remaining
-- [ ] FIFO priority — same price, earlier OrderSeq fills first
-- [ ] Price priority — better price fills first
-- [ ] Cancel existing order → removed from book
-
----
-
-### STEP 12 — Integration Test (manual)
-
-```bash
-# 1. docker compose up
-# 2. pnpm db:seed
-# 3. pnpm worker:dev (or nest start worker)
-# → Verify: trading_pairs.status = READY (after MarketOpened)
-# 4. POST /orders (place BUY)
-# → Verify: Order status = PENDING → OPEN (after OrderOpened)
-# 5. POST /orders (place matching SELL)
-# → Engine should emit TradeCreated (logged, not settled yet)
-# 6. POST /orders/:id/cancel
-# → Verify: Order status = CANCEL_PENDING → CANCELLED
+```yaml
+# docker-compose.yml
+matching-engine:
+  build:
+    context: ./services/matching-engine
+    dockerfile: Dockerfile
+  environment:
+    REDIS_URL: redis://redis:6379
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
 ```
 
 ---
 
-## Priority Order (What to Do First)
+## Prioritized Implementation Order
 
 ```
-1. Fix go.mod (go 1.23, add redis/go-redis)          [5 min]
-2. Add MessageEnvelope alias in envelope.go            [2 min]
-3. Complete pair/engine.go (3 handlers + event builders) [2–3 hrs]
-4. Create internal/publisher/ and internal/transport/  [2–3 hrs]
-5. Fix main.go                                         [30 min]
-6. go build ./... → must pass                          [verify]
-7. Fix open-market.bootstrap.service.ts                [30 min]
-8. Implement outbox-poller.service.ts                  [1–2 hrs]
-9. Create engine-event-consumer.service.ts             [1–2 hrs]
-10. Wire worker.module.ts                              [10 min]
-11. tsc --noEmit → must pass                           [verify]
-12. Add matching-engine to docker-compose.yml          [15 min]
-13. Go unit tests                                      [1–2 hrs]
-14. Integration test                                   [30 min]
+=== PHASE 6 COMPLETION ===
+
+Step 1  [5 min]   Fix schema.prisma: add url = env("DATABASE_URL") to datasource
+Step 2  [5 min]   Fix price_heap.go: Swap() value receiver → pointer receiver (B1)
+Step 3  [15 min]  Fix message/command.go: export fields, add json tags, fix typo, fix constants (B7+H1)
+Step 4  [30 min]  Fix fixed/decimal.go: nil guards, add Mul, MustParse (H2)
+Step 5  [2 hrs]   Implement pair/events.go: all 8 builders with real payloads (B3)
+Step 6  [2 hrs]   Implement transport/redis_customer.go: Run() + dispatch() (B2)
+Step 7  [30 min]  Fix cmd/engine/main.go: redis.ParseURL, health ping (B8)
+Step 8  [verify]  go build ./... → must pass, go test ./... → must pass
+
+Step 9  [30 min]  Fix open-market.bootstrap.service.ts: full implementation (B5)
+Step 10 [2 hrs]   Implement outbox-poller.service.ts: full polling loop (B4)
+Step 11 [2 hrs]   Create engine-event-consumer.service.ts (M2)
+Step 12 [15 min]  Wire worker.module.ts (M1)
+Step 13 [verify]  tsc --noEmit → must pass, nest build → must pass
+
+Step 14 [15 min]  Add Dockerfile + matching-engine to docker-compose.yml (M6)
+Step 15 [30 min]  Integration test: docker compose up → seed → verify MarketOpened→READY, PlaceOrder→OPEN
+
+=== PHASE 7 (AFTER PHASE 6 DONE) ===
+
+Step 16  TradeCreated consumer: settlement transaction
+         - Lock orders by id ASC
+         - Lock wallets (buyer, seller, treasury) by id ASC
+         - Compute quoteAmount = executionPrice × executedQuantity
+         - Compute fees (buyer: base asset, seller: quote asset)
+         - INSERT trade (engineMatchId as dedup key)
+         - UPDATE orders (filledQuantity, remainingQuantity, remainingLockedAmount, status)
+         - UPDATE wallets (available/locked)
+         - INSERT ledger_entries (TRADE_SETTLEMENT + TRADING_FEE per side)
+         - INSERT outbox_events (TradeSettled, OrderUpdated, BalanceUpdated)
+         - INSERT processed_events
+         - Commit → XACK
+
+Step 17  OrderRejected consumer: unlock wallet balance
+         - UPDATE orders SET status='REJECTED'
+         - moveLockedToAvailable (amount = remainingLockedAmount)
+         - INSERT ledger_entries ORDER_UNLOCK
+         - Commit → XACK
+
+Step 18  OrderCancelled consumer: unlock remaining locked
+         - UPDATE orders SET status='CANCELLED'
+         - moveLockedToAvailable (amount = remainingLockedAmount)
+         - INSERT ledger_entries ORDER_UNLOCK
+         - Commit → XACK
+
+Step 19  fixed.Decimal.Mul() needed for: quoteAmount, fee calculations
+
+Step 20  wallet-balance.service.ts: add settleTrade() method
+         (atomic: debitLocked seller quote, creditAvailable buyer base, fee splits)
 ```
 
 ---
 
-## Phase 7 Preview (After Phase 6 Done)
+## Go Unit Tests Needed
 
-Phase 7 = Trade Settlement. The `TradeCreated` consumer (currently skipped) will:
+```
+internal/fixed/decimal_test.go
+  - Parse valid string
+  - Parse with fewer than 18 decimals
+  - Add, Sub, Cmp
+  - Mul (scale correctness)
+  - Zero-value nil safety
+  - String() round-trip
 
-1. Lock Buy + Sell order rows (by id ASC to avoid deadlock)
-2. Lock Buyer + Seller + Treasury wallets (by id ASC)
-3. Calculate: `quoteAmount = executionPrice × executedQuantity`
-4. Calculate fees (buyer pays in Base, seller pays in Quote)
-5. Price improvement refund for maker
-6. `INSERT INTO trades`
-7. `UPDATE orders` (filledQuantity, remainingQuantity, remainingLockedAmount, status)
-8. `UPDATE wallets` (available/locked balances)
-9. `INSERT INTO ledger_entries` (TRADE_SETTLEMENT + TRADING_FEE per side)
-10. `INSERT INTO outbox_events` (TradeSettled, OrderUpdated, BalanceUpdated domain events)
-11. `INSERT INTO processed_events`
-12. Commit → XACK
+internal/orderbook/price_heap_test.go
+  - heap.Init + Push + Pop maintains max/min invariant (was broken by B1)
+  - Swap correctness after fix
 
-**Idempotency key:** `engineMatchId` (unique constraint on `trades` table)
+internal/matching/matcher_test.go
+  - No match: OrderOpened only
+  - Full fill: TradeCreated only, no OrderOpened
+  - Partial fill: TradeCreated + OrderOpened with correct remaining
+  - FIFO: same price, earlier orderSeq fills first
+  - Price priority: better price fills first
+  - Multi-match: one incoming fills multiple resting
+  - Cancel: RemoveOrder works correctly
+```
+
+---
+
+## Definition of Done — Phase 6
+
+- [ ] `go build ./...` passes with 0 errors
+- [ ] `go test ./...` passes (matcher + decimal + heap)
+- [ ] `tsc --noEmit` passes with 0 errors
+- [ ] `docker compose up` starts Postgres + Redis + Go Engine
+- [ ] Seed runs: `pnpm db:seed` creates sequences + trading pairs
+- [ ] Worker starts: `OpenMarketBootstrapService` creates Outbox `OpenMarket`
+- [ ] Outbox poller pushes `OpenMarket` to Redis stream
+- [ ] Go engine consumes → publishes `MarketOpened`
+- [ ] Backend worker consumes `MarketOpened` → `TradingPair.status = READY`
+- [ ] `POST /orders` → Order `PENDING` + Outbox `PlaceOrder`
+- [ ] Outbox poller pushes `PlaceOrder` → Engine publishes `OrderOpened`
+- [ ] Backend worker → `Order.status = OPEN`
+- [ ] Duplicate `messageId` → idempotent skip

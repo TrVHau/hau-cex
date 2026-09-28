@@ -19,7 +19,7 @@ func (h PriceHeap) Less(i, j int) bool {
 	return comparison < 0
 }
 
-func (h PriceHeap) Swap(i, j int) {
+func (h *PriceHeap) Swap(i, j int) {
 	h.levels[i], h.levels[j] = h.levels[j], h.levels[i]
 }
 
