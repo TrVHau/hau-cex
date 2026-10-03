@@ -19,7 +19,6 @@ export class OpenMarketBootstrapService implements OnApplicationBootstrap {
   private async bootstrapMarkets(): Promise<void> {
     const pairs = await this.prisma.tradingPair.findMany({
       where: { status: { not: 'READY' } },
-      include: { baseAsset: true, quoteAsset: true },
     });
 
     for (const pair of pairs) {

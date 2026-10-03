@@ -32,12 +32,7 @@ func New(redisClient *redis.Client, pub *publisher.Publisher) *Customer {
 	}
 }
 
-// XGROUP CREATE stream:engine:commands matching-engine-v1 $ MKSTREAM (idempotent)
-// XREADGROUP GROUP matching-engine-v1 engine-1 COUNT 10 BLOCK 200ms STREAMS stream:engine:commands >
-// Parse message fields → unmarshal commandSeq, messageType, payload
-// dispatch(): route by messageType → HandleOpenMarket / HandlePlaceOrder / HandleCancelOrder
-// PublishBatch() events → XACK only after successful publish
-// Get-or-create PairEngine by partitionKey (tradingPairId)
+// Run consumes engine commands from Redis Streams, dispatches to PairEngine, publishes events, then ACKs.
 func (c *Customer) Run(ctx context.Context) error {
 	err := c.redis.XGroupCreateMkStream(ctx, EngineCommandsStream, CommandGroup, "$").Err()
 
@@ -216,7 +211,6 @@ func (c *Customer) dispatch(
 	if err := c.publisher.PublishBatch(ctx, events); err != nil {
 		return fmt.Errorf("publish events: %w", err)
 	}
-	engine.MarkInFlightPublished()
 
 	// 8. ACK sau khi publish thành công
 	return c.ack(ctx, msg.ID)

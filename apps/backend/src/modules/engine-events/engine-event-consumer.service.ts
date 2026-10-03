@@ -12,14 +12,6 @@ const ENGINE_EVENTS_STREAM = 'stream:engine:events';
 const CONSUMER_GROUP = 'backend-engine-events-v1';
 const CONSUMER_NAME = 'backend-1';
 
-interface EngineEventMessage {
-  messageId: string;
-  messageType: string;
-  partitionKey: string;
-  commandSeq: string;
-  payload: string;
-}
-
 @Injectable()
 export class EngineEventConsumerService
   implements OnApplicationBootstrap, OnApplicationShutdown
@@ -101,45 +93,37 @@ export class EngineEventConsumerService
     msgId: string,
     fields: Record<string, string>,
   ): Promise<void> {
-    const msg: EngineEventMessage = {
-      messageId: fields.messageId,
-      messageType: fields.messageType,
-      partitionKey: fields.partitionKey,
-      commandSeq: fields.commandSeq,
-      payload: fields.payload,
-    };
-
-    const payload = JSON.parse(msg.payload) as Record<string, unknown>;
-    const payloadHash = JSON.stringify(payload);
+    const messageId = fields.messageId;
+    const messageType = fields.messageType;
+    const payload = JSON.parse(fields.payload) as Record<string, unknown>;
 
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.processedEvent.findUnique({
         where: {
           consumerName_messageId: {
-            consumerName: CONSUMER_GROUP,
-            messageId: msg.messageId,
+            consumerName: CONSUMER_NAME,
+            messageId,
           },
         },
       });
 
-      if (existing) return; // already processed — ACK below, outside tx
+      if (existing) return;
 
       const tradingPairId =
-        (payload.tradingPairId as string) ?? msg.partitionKey;
-      await this.dispatch(msg.messageType, tradingPairId, payload, tx);
+        (payload.tradingPairId as string) ?? fields.partitionKey;
+      await this.dispatch(messageType, tradingPairId, payload, tx);
 
       await tx.processedEvent.create({
         data: {
-          consumerName: CONSUMER_GROUP,
-          messageId: msg.messageId,
-          messageType: msg.messageType,
-          payloadHash,
+          consumerName: CONSUMER_NAME,
+          messageId,
+          messageType,
+          payloadHash: JSON.stringify(payload),
           result: 'PROCESSED',
         },
       });
-    }); // commit
+    });
 
-    // ACK after DB commit — at-least-once with idempotency guard
     await this.ack(msgId);
   }
 
