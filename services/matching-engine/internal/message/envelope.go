@@ -13,4 +13,3 @@ type EventEnvelope struct {
 	Payload         any       `json:"payload"`
 }
 
-type MessageEnvelope = EventEnvelope

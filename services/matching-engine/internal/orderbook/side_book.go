@@ -10,10 +10,10 @@ import (
 // Ask: min-heap (giá thấp ưu tiên)
 
 type SideBook struct {
-	side   Side
 	heap   PriceHeap
-	levels map[string]*PriceLevel // price.string -> PriceLevel
+	levels map[string]*PriceLevel // price.String() -> PriceLevel
 }
+
 
 func (sb *SideBook) BestPrice() (fixed.Decimal, bool) {
 	level := sb.heap.Top()
@@ -62,10 +62,6 @@ func (sb *SideBook) RemoveOrder(orderID string, price fixed.Decimal) bool {
 	}
 	sb.RemoveLevelIfEmpty(price)
 	return true
-}
-
-func (sb *SideBook) GetLevels(price string) *PriceLevel {
-	return sb.levels[price]
 }
 
 func (sb *SideBook) Levels() map[string]*PriceLevel {

@@ -2,6 +2,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { OrderStatus, Prisma } from '../../generated/prisma';
+
 import {
   OrderListResponseDto,
   OrderResponseDto,
@@ -9,6 +10,8 @@ import {
 import { OrderType } from '../../common/enums/order-type.enum';
 import { OrderListQueryDto } from './dto/order-list-query.dto';
 import { encodeCursor, decodeCursor } from '../../common/helpers/cursor.helper';
+import { formatDecimal } from '../../common/helpers/decimal.helper';
+
 
 // ─── Kiểu Prisma inferred cho Order kèm tradingPair ────────────────────────
 type OrderWithPair = Prisma.OrderGetPayload<{
@@ -111,21 +114,18 @@ export class OrderQueryService {
 
   // ─── Mapper ───────────────────────────────────────────────────────────────
   private toResponseDto(order: OrderWithPair): OrderResponseDto {
-    // Decimal.toFixed(18) rồi trim trailing zeros để response gọn gàng
-    const fmt = (d: Prisma.Decimal) => d.toFixed(18).replace(/\.?0+$/, '');
-
     return {
       orderId: order.id,
       symbol: order.tradingPair.symbol,
       side: order.side,
       type: OrderType.LIMIT,
       status: order.status,
-      price: fmt(order.price),
-      quantity: fmt(order.quantity),
-      filledQuantity: fmt(order.filledQuantity),
-      remainingQuantity: fmt(order.remainingQuantity),
-      lockedAmount: fmt(order.lockedAmount),
-      remainingLockedAmount: fmt(order.remainingLockedAmount),
+      price: formatDecimal(order.price),
+      quantity: formatDecimal(order.quantity),
+      filledQuantity: formatDecimal(order.filledQuantity),
+      remainingQuantity: formatDecimal(order.remainingQuantity),
+      lockedAmount: formatDecimal(order.lockedAmount),
+      remainingLockedAmount: formatDecimal(order.remainingLockedAmount),
       createdAt: order.createdAt.toISOString(),
       updatedAt: order.updatedAt.toISOString(),
     };

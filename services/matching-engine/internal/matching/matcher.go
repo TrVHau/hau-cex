@@ -49,9 +49,9 @@ func Match(book *orderbook.OrderBook, incoming *orderbook.Order) MatchResult {
 		// lấy resting order FIFO
 		var level *orderbook.PriceLevel
 		if incoming.Side == orderbook.Buy {
-			level = book.Asks.GetLevels(bestPrice.String())
+			level = book.Asks.Levels()[bestPrice.String()]
 		} else {
-			level = book.Bids.GetLevels(bestPrice.String())
+			level = book.Bids.Levels()[bestPrice.String()]
 		}
 		resting := level.Front()
 

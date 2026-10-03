@@ -1,7 +1,5 @@
 package orderbook
 
-import "github.com/TrVHau/hau-cex/services/matching-engine/internal/fixed"
-
 type OrderBook struct {
 	Bids         SideBook
 	Asks         SideBook
@@ -11,12 +9,10 @@ type OrderBook struct {
 func NewOrderBook() *OrderBook {
 	return &OrderBook{
 		Bids: SideBook{
-			side:   Buy,
 			heap:   PriceHeap{max: true},
 			levels: make(map[string]*PriceLevel),
 		},
 		Asks: SideBook{
-			side:   Sell,
 			heap:   PriceHeap{max: false},
 			levels: make(map[string]*PriceLevel),
 		},
@@ -50,10 +46,3 @@ func (ob *OrderBook) RemoveOrder(orderID string) bool {
 	return removed
 }
 
-func (ob *OrderBook) GetBid() (fixed.Decimal, bool) {
-	return ob.Bids.BestPrice()
-}
-
-func (ob *OrderBook) GetAsk() (fixed.Decimal, bool) {
-	return ob.Asks.BestPrice()
-}

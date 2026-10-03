@@ -212,18 +212,9 @@ func (c *Customer) dispatch(
 		return c.ack(ctx, msg.ID)
 	}
 
-	// 7. Publish events
-	//
-	// Publish thành công rồi mới ACK.
-	engine.InFlight = &pair.InFlightBatch{
-		CommandSequence: commandSeq,
-		Events:          events,
-	}
+	// 7. Publish events — ACK only after successful publish.
 	if err := c.publisher.PublishBatch(ctx, events); err != nil {
-		return fmt.Errorf(
-			"publish events: %w",
-			err,
-		)
+		return fmt.Errorf("publish events: %w", err)
 	}
 	engine.MarkInFlightPublished()
 
