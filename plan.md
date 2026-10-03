@@ -141,11 +141,21 @@ type CancelOrderRejectedPayload struct {
 
 ---
 
-### B4 — `outbox-poller.service.ts`: completely empty file
+### B4 — `outbox-poller.service.ts`: đã compile và wiring vào worker
 
 **File:** `apps/backend/src/modules/outbox/outbox-poller.service.ts`
 
-Without this, **no commands ever reach the Go engine**. Must implement:
+Đã hoàn thành:
+
+- Inject `PrismaService` và Redis qua token `REDIS_CLIENT`.
+- Định nghĩa `OutboxRow` và sửa toàn bộ syntax/type của query.
+- `onApplicationBootstrap()` gọi `pollLoop()`, vòng lặp gọi `processBatch()`.
+- Retry dùng `NOW() + (${delaySeconds} * INTERVAL '1 second')` thay vì nhét tham số vào string literal.
+- `WorkerModule` import `RedisModule` và đăng ký `OutboxPollerService`.
+
+Cheap check: `pnpm --filter @hau-cex/backend run build:worker` không còn lỗi ở B4; hiện chỉ còn 3 lỗi thuộc B5. Chưa có test runtime cho publish/retry/idempotency.
+
+Implementation đã áp dụng:
 
 ```typescript
 @Injectable()
@@ -229,7 +239,7 @@ export class OutboxPollerService
 
 **File:** `apps/backend/src/modules/engine/open-market.bootstrap.service.ts`
 
-`async;k` is invalid TypeScript — won't compile. Entire class body missing.
+`async;k` is invalid TypeScript — won't compile. Build worker hiện báo 3 lỗi ở file này: class không implement được `onApplicationBootstrap`, cùng với hai member ngầm định `async` và `k`. Entire class body missing.
 
 Must implement `onApplicationBootstrap()` to:
 
@@ -239,13 +249,15 @@ Must implement `onApplicationBootstrap()` to:
 
 ---
 
-### B6 — `schema.prisma`: missing `url` in datasource
+### B6 — `schema.prisma`: Prisma 7 đã chuyển URL sang config
 
 **File:** `apps/backend/prisma/schema.prisma`
 
 `datasource db` block is missing `url = env("DATABASE_URL")`. `prisma migrate` and `prisma generate` will fail without it.
 
-**Fix:**
+`prisma.config.ts` hiện đã khai báo `datasource.url = env('DATABASE_URL')`. Trong Prisma 7, `url` bị comment trong `schema.prisma` là đúng theo migration mới, nên B6 không còn là blocker hiện tại và không cần áp dụng fix cũ.
+
+Không áp dụng đoạn fix cũ:
 
 ```prisma
 datasource db {

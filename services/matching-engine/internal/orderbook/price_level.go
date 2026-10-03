@@ -7,10 +7,10 @@ import (
 )
 
 type PriceLevel struct {
-	Price   fixed.Decimal
+	Price         fixed.Decimal
 	TotalQuantity fixed.Decimal
-	orders  *list.List // fifo queue of *Order
-	orderMap map[string]*list.Element // map from OrderID to list.Element
+	orders        *list.List               // fifo queue of *Order
+	orderMap      map[string]*list.Element // map from OrderID to list.Element
 }
 
 func (pl *PriceLevel) Enqueue(order *Order) {
@@ -57,4 +57,11 @@ func (pl *PriceLevel) Remove(orderID string) *Order {
 
 func (pl *PriceLevel) IsEmpty() bool {
 	return pl.orders == nil || pl.orders.Len() == 0
+}
+
+func (pl *PriceLevel) Count() int {
+	if pl.orders == nil {
+		return 0
+	}
+	return pl.orders.Len()
 }

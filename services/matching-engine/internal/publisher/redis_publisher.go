@@ -3,6 +3,7 @@ package publisher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/TrVHau/hau-cex/services/matching-engine/internal/message"
 	"github.com/redis/go-redis/v9"
@@ -24,7 +25,10 @@ func New(client *redis.Client) *Publisher {
 func (p *Publisher) PublishBatch(ctx context.Context, events []message.EventEnvelope) error {
 	pipe := p.client.Pipeline()
 	for _, event := range events {
-		payload, _ := json.Marshal(event.Payload)
+		payload, err := json.Marshal(event.Payload)
+		if err != nil {
+			return fmt.Errorf("marshal payload for %s: %w", event.MessageType, err)
+		}
 		pipe.XAdd(ctx, &redis.XAddArgs{
 			Stream: EngineEventsStream,
 			Values: map[string]any{

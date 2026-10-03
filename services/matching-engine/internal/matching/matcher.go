@@ -6,12 +6,14 @@ import (
 )
 
 type TradeResult struct {
-	MatchIndex       int
-	RestingOrderId   string
-	IncomingOrderId  string
-	ExecutionPrice   fixed.Decimal // = resting price
-	ExecutedQuantity fixed.Decimal
-	RestingFull      bool // resting đã fill hết
+	MatchIndex                 int
+	RestingOrderId             string
+	IncomingOrderId            string
+	ExecutionPrice             fixed.Decimal // = resting price (maker price)
+	ExecutedQuantity           fixed.Decimal
+	RestingFull                bool // resting đã fill hết
+	RestingRemainingQuantity   fixed.Decimal
+	IncomingRemainingQuantity  fixed.Decimal // remaining after this trade
 }
 
 type MatchResult struct {
@@ -19,7 +21,7 @@ type MatchResult struct {
 	IncomingFull bool // incoming đã fill hết
 }
 
-func Match(book *orderbook.OrderBook, incoming *orderbook.Order, cmdSeq uint64) MatchResult {
+func Match(book *orderbook.OrderBook, incoming *orderbook.Order) MatchResult {
 	var trades []TradeResult
 	matchIndex := 0
 
@@ -64,7 +66,6 @@ func Match(book *orderbook.OrderBook, incoming *orderbook.Order, cmdSeq uint64) 
 		restingFull := resting.RemainingQuantity.IsZero()
 		if restingFull {
 			level.Dequeue()
-			book.ActiveOrders[resting.OrderID] = nil
 			delete(book.ActiveOrders, resting.OrderID)
 			if level.IsEmpty() {
 				if incoming.Side == orderbook.Buy {
@@ -76,12 +77,14 @@ func Match(book *orderbook.OrderBook, incoming *orderbook.Order, cmdSeq uint64) 
 		}
 
 		trades = append(trades, TradeResult{
-			MatchIndex:       matchIndex,
-			RestingOrderId:   resting.OrderID,
-			IncomingOrderId:  incoming.OrderID,
-			ExecutionPrice:   executionPrice,
-			ExecutedQuantity: executedQuantity,
-			RestingFull:      restingFull,
+			MatchIndex:                matchIndex,
+			RestingOrderId:            resting.OrderID,
+			IncomingOrderId:           incoming.OrderID,
+			ExecutionPrice:            executionPrice,
+			ExecutedQuantity:          executedQuantity,
+			RestingFull:               restingFull,
+			RestingRemainingQuantity:  resting.RemainingQuantity,
+			IncomingRemainingQuantity: incoming.RemainingQuantity,
 		})
 		matchIndex++
 	}

@@ -14,9 +14,11 @@ import (
 
 func main() {
 
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_URL"),
-	})
+	options, err := redis.ParseURL(os.Getenv("REDIS_URL"))
+	if err != nil {
+		log.Fatalf("invalid REDIS_URL: %v", err)
+	}
+	redisClient := redis.NewClient(options)
 	pub := publisher.New(redisClient)
 	consumer := transport.New(redisClient, pub)
 

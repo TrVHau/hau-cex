@@ -67,3 +67,7 @@ func (sb *SideBook) RemoveOrder(orderID string, price fixed.Decimal) bool {
 func (sb *SideBook) GetLevels(price string) *PriceLevel {
 	return sb.levels[price]
 }
+
+func (sb *SideBook) Levels() map[string]*PriceLevel {
+	return sb.levels
+}

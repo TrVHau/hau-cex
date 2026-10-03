@@ -45,11 +45,17 @@ func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint
 		return nil
 	} else if err == ErrSequenceGap {
 		e.State = StateFailed
-		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", "Expected command sequence gap")}
 	}
+
+	if e.Book == nil {
+		e.Book = orderbook.NewOrderBook()
+	}
+	e.Market = cmd.Market
 	e.State = StateReady
 	e.LastProcessedCmdSeq = cmdSeq
-	return []message.EventEnvelope{buildMarketOpened(e)}
+
+	return []message.EventEnvelope{buildMarketOpened(e, cmdSeq)}
 }
 
 func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
@@ -57,10 +63,11 @@ func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint
 		return nil
 	} else if err == ErrSequenceGap {
 		e.State = StateFailed
-		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
 	}
+
 	if e.State != StateReady {
-		return []message.EventEnvelope{buildOrderRejected(cmd, "MARKET_NOT_READY")}
+		return []message.EventEnvelope{buildOrderRejected(e, cmd, cmdSeq, "MARKET_NOT_READY")}
 	}
 
 	incoming := &orderbook.Order{
@@ -70,25 +77,28 @@ func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint
 		Price:             cmd.Price,
 		OriginalQuantity:  cmd.Quantity,
 		RemainingQuantity: cmd.Quantity,
-		OrderSeq:          cmd.OrderSeq,
+		OrderSeq:          cmd.OrderSequence,
 	}
 
-	result := matching.Match(e.Book, incoming, cmdSeq)
-	var events []message.EventEnvelope
+	result := matching.Match(e.Book, incoming)
+	events := make([]message.EventEnvelope, 0)
 
 	for _, trade := range result.Trades {
 		e.LastTradeSequence++
-		engineMatchId := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
-		events = append(events, buildTradeCreated(e, trade, engineMatchId, cmdSeq))
+		engineMatchID := fmt.Sprintf("%s:%d:%d", e.PairID, cmdSeq, trade.MatchIndex)
+		events = append(events, buildTradeCreated(e, cmd, trade, engineMatchID, cmdSeq))
 	}
 
+	// Only emit OrderOpened if incoming was NOT fully filled
 	if !result.IncomingFull {
-		events = append(events, buildOrderOpened(e, cmd, incoming.RemainingQuantity))
+		events = append(events, buildOrderOpened(e, cmd, cmdSeq, incoming.RemainingQuantity))
 	}
 
 	e.LastBookSequence++
-	events = append(events, buildOrderBookChanged(e))
+	events = append(events, buildOrderBookChanged(e, cmdSeq))
 	e.LastProcessedCmdSeq = cmdSeq
+	e.storeInFlight(cmdSeq, events)
+
 	return events
 }
 
@@ -97,35 +107,54 @@ func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq ui
 		return nil
 	} else if err == ErrSequenceGap {
 		e.State = StateFailed
-		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP")}
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
 	}
+
 	if e.State != StateReady {
-		return []message.EventEnvelope{buildCancelOrderRejected(cmd, "MARKET_NOT_READY")}
+		return []message.EventEnvelope{buildCancelOrderRejected(e, cmd, cmdSeq, "MARKET_NOT_READY")}
 	}
 
 	order, ok := e.Book.ActiveOrders[cmd.OrderID]
 	if !ok {
-		return []message.EventEnvelope{buildCancelOrderRejected(cmd, "ORDER_NOT_FOUND")}
+		return []message.EventEnvelope{buildCancelOrderRejected(e, cmd, cmdSeq, "ORDER_NOT_FOUND")}
 	}
 
+	cancelledQty := order.RemainingQuantity
 	e.Book.RemoveOrder(cmd.OrderID)
 	e.LastBookSequence++
 	e.LastProcessedCmdSeq = cmdSeq
 
-	return []message.EventEnvelope{
-		buildOrderCanceled(e, cmd, order.RemainingQuantity),
-		buildOrderBookChanged(e),
+	events := []message.EventEnvelope{
+		buildOrderCancelled(e, cmd, cmdSeq, cancelledQty),
+		buildOrderBookChanged(e, cmdSeq),
+	}
+	e.storeInFlight(cmdSeq, events)
+
+	return events
+}
+
+func (e *PairEngine) storeInFlight(cmdSeq uint64, events []message.EventEnvelope) {
+	e.InFlight = &InFlightBatch{
+		CommandSequence: cmdSeq,
+		Events:          events,
 	}
 }
 
-// Sequence validation
+func (e *PairEngine) MarkInFlightPublished() {
+	if e.InFlight != nil {
+		e.InFlight.Published = true
+	}
+}
+
+// validateSeq returns nil if cmdSeq is next expected, ErrDuplicateCommand if already
+// processed, ErrSequenceGap if a gap is detected.
 func (e *PairEngine) validateSeq(cmdSeq uint64) error {
 	expected := e.LastProcessedCmdSeq + 1
 	if cmdSeq < expected {
-		return ErrDuplicateCommand // đã xử lý, skip
+		return ErrDuplicateCommand
 	}
 	if cmdSeq > expected {
-		return ErrSequenceGap // block Pair
+		return ErrSequenceGap
 	}
 	return nil
 }

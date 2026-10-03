@@ -8,10 +8,10 @@ import (
 type CommandType string
 
 const (
-	CommandOpenMarket    CommandType = "OPEN_MARKET"
-	CommandPlaceOrder    CommandType = "PLACE_ORDER"
-	CommandCancelOrder   CommandType = "CANCEL_ORDER"
-	CommandSuspendMarket CommandType = "SUSPEND_MARKET"
+	CommandOpenMarket    CommandType = "OpenMarket"
+	CommandPlaceOrder    CommandType = "PlaceOrder"
+	CommandCancelOrder   CommandType = "CancelOrder"
+	CommandSuspendMarket CommandType = "SuspendMarket"
 )
 
 type Command interface {
@@ -19,11 +19,17 @@ type Command interface {
 }
 
 type OpenMarketCommand struct {
-	tradingPairID string
-	market        string
-	tickSize      fixed.Decimal
-	MinQuantity   fixed.Decimal
-	MinNotional   fixed.Decimal
+	TradingPairID     string        `json:"tradingPairId"`
+	Market            string        `json:"market"`
+	BaseAssetID       string        `json:"baseAssetId"`
+	QuoteAssetID      string        `json:"quoteAssetId"`
+	PricePrecision    int           `json:"pricePrecision"`
+	QuantityPrecision int           `json:"quantityPrecision"`
+	TickSize          fixed.Decimal `json:"tickSize"`
+	StepSize          fixed.Decimal `json:"stepSize"`
+	MinQuantity       fixed.Decimal `json:"minQuantity"`
+	MinNotional       fixed.Decimal `json:"minNotional"`
+	OpenedAt          string        `json:"openedAt"`
 }
 
 func (c *OpenMarketCommand) CommandType() CommandType {
@@ -31,14 +37,16 @@ func (c *OpenMarketCommand) CommandType() CommandType {
 }
 
 type PlaceOrderCommand struct {
-	TradingPairID string
-	Market        string
-	OrderID       string
-	UserID        string
-	Side          orderbook.Side
-	Price         fixed.Decimal
-	Quantity      fixed.Decimal
-	OrderSeq      uint64
+	TradingPairID string         `json:"tradingPairId"`
+	Market        string         `json:"market"`
+	OrderID       string         `json:"orderId"`
+	UserID        string         `json:"userId"`
+	Side          orderbook.Side `json:"side"`
+	Type          string         `json:"type"`
+	Price         fixed.Decimal  `json:"price"`
+	Quantity      fixed.Decimal  `json:"quantity"`
+	OrderSequence uint64         `json:"orderSequence,string"`
+	CreatedAt     string         `json:"createdAt"`
 }
 
 func (c *PlaceOrderCommand) CommandType() CommandType {
@@ -46,11 +54,12 @@ func (c *PlaceOrderCommand) CommandType() CommandType {
 }
 
 type CancelOrderCommand struct {
-	TradingPairID string
-	Market        string
-	OrderID       string
-	UserID        string
-	RequestdBy    string
+	TradingPairID string `json:"tradingPairId"`
+	Market        string `json:"market"`
+	OrderID       string `json:"orderId"`
+	UserID        string `json:"userId"`
+	RequestedBy   string `json:"requestedBy"`
+	RequestedAt   string `json:"requestedAt"`
 }
 
 func (c *CancelOrderCommand) CommandType() CommandType {
@@ -58,9 +67,10 @@ func (c *CancelOrderCommand) CommandType() CommandType {
 }
 
 type SuspendMarketCommand struct {
-	TradingPairID string
-	Market        string
-	Reason        string
+	TradingPairID string `json:"tradingPairId"`
+	Market        string `json:"market"`
+	Reason        string `json:"reason"`
+	SuspendedAt   string `json:"suspendedAt"`
 }
 
 func (c *SuspendMarketCommand) CommandType() CommandType {
