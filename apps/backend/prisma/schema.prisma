@@ -5,6 +5,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // "message": "The datasource property `url` is no longer supported in schema files. Move connection URLs for Migrate to `prisma.config.ts` and pass either `adapter` for a direct database connection or `accelerateUrl` for Accelerate to the `PrismaClient` constructor. See https://pris.ly/d/config-datasource and https://pris.ly/d/prisma7-client-config",
+  // url      = env("DATABASE_URL")
 }
 
 // Enums
@@ -198,6 +200,8 @@ model LedgerEntry {
   entryType     LedgerEntryType   @map("entry_type")
   balanceType   LedgerBalanceType @map("balance_type")
   amount        Decimal           @db.Decimal(38, 18)
+  beforeBalance Decimal           @map("before_balance") @db.Decimal(38, 18)
+  afterBalance  Decimal           @map("after_balance") @db.Decimal(38, 18)
   referenceType String            @map("reference_type") @db.VarChar(50)
   referenceId   String            @map("reference_id") @db.Uuid
   operationId   String            @map("operation_id") @db.Uuid
@@ -290,7 +294,7 @@ model Trade {
   sellerFeeAmount  Decimal   @map("seller_fee_amount") @db.Decimal(38, 18)
   sequence         BigInt    @db.BigInt
   matchedAt        DateTime  @map("matched_at") @db.Timestamptz(6)
-  settledAt        DateTime  @map("settled_at") @db.Timestamptz(6)
+  settledAt        DateTime? @map("settled_at") @db.Timestamptz(6)
 
   tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Restrict, map: "fk_trades_trading_pair")
   buyOrder    Order       @relation("BuyOrder", fields: [buyOrderId], references: [id], onDelete: Restrict, map: "fk_trades_buy_order")

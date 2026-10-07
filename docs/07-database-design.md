@@ -293,6 +293,8 @@ Ledger là append-only.
 | entry_type     | ledger_entry_type   | NOT NULL      |
 | balance_type   | ledger_balance_type | NOT NULL      |
 | amount         | NUMERIC(38,18)      | NOT NULL      |
+| before_balance | NUMERIC(38,18)      | NOT NULL      |
+| after_balance  | NUMERIC(38,18)      | NOT NULL      |
 | reference_type | VARCHAR(50)         | NOT NULL      |
 | reference_id   | UUID                | NOT NULL      |
 | operation_id   | UUID                | NOT NULL      |

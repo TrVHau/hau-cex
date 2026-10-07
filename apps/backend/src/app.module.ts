@@ -4,6 +4,10 @@ import { AppService } from './app.service';
 import { ConfigModule } from '@nestjs/config';
 import { resolve } from 'node:path';
 import { PrismaModule } from './core/prisma/prisma.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { WalletsModule } from './modules/wallets/wallets.module';
+import { OrdersModule } from './modules/orders/orders.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -11,6 +15,9 @@ import { PrismaModule } from './core/prisma/prisma.module';
       envFilePath: resolve(process.cwd(), '../../.env'),
     }),
     PrismaModule,
+    AuthModule,
+    WalletsModule,
+    OrdersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
