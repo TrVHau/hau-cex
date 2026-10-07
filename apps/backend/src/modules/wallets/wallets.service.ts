@@ -95,7 +95,9 @@ export class WalletsService {
     const wallet = await this.prisma.wallet.findFirst({
       where: {
         userId,
-        asset: { symbol: { equals: assetSymbol, mode: 'insensitive' } },
+        asset: {
+          symbol: { equals: assetSymbol.toUpperCase(), mode: 'insensitive' },
+        },
       },
     });
 

@@ -37,13 +37,12 @@ type PairEngine struct {
 type InFlightBatch struct {
 	CommandSequence uint64
 	Events          []message.EventEnvelope
-	Published       bool
 }
 
 func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope {
-	if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
+	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
 		return nil
-	} else if err == ErrSequenceGap {
+	} else if errors.Is(err, ErrSequenceGap) {
 		e.State = StateFailed
 		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", "Expected command sequence gap")}
 	}
@@ -55,13 +54,15 @@ func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint
 	e.State = StateReady
 	e.LastProcessedCmdSeq = cmdSeq
 
-	return []message.EventEnvelope{buildMarketOpened(e, cmdSeq)}
+	events := []message.EventEnvelope{buildMarketOpened(e, cmdSeq)}
+	e.storeInFlight(cmdSeq, events)
+	return events
 }
 
 func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint64) []message.EventEnvelope {
-	if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
+	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
 		return nil
-	} else if err == ErrSequenceGap {
+	} else if errors.Is(err, ErrSequenceGap) {
 		e.State = StateFailed
 		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
 	}
@@ -81,7 +82,7 @@ func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint
 	}
 
 	result := matching.Match(e.Book, incoming)
-	events := make([]message.EventEnvelope, 0)
+	var events []message.EventEnvelope
 
 	for _, trade := range result.Trades {
 		e.LastTradeSequence++
@@ -103,9 +104,9 @@ func (e *PairEngine) HandlePlaceOrder(cmd message.PlaceOrderCommand, cmdSeq uint
 }
 
 func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope {
-	if err := e.validateSeq(cmdSeq); err == ErrDuplicateCommand {
+	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
 		return nil
-	} else if err == ErrSequenceGap {
+	} else if errors.Is(err, ErrSequenceGap) {
 		e.State = StateFailed
 		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
 	}
@@ -140,11 +141,6 @@ func (e *PairEngine) storeInFlight(cmdSeq uint64, events []message.EventEnvelope
 	}
 }
 
-func (e *PairEngine) MarkInFlightPublished() {
-	if e.InFlight != nil {
-		e.InFlight.Published = true
-	}
-}
 
 // validateSeq returns nil if cmdSeq is next expected, ErrDuplicateCommand if already
 // processed, ErrSequenceGap if a gap is detected.

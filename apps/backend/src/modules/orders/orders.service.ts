@@ -178,10 +178,14 @@ export class OrdersService {
           user_id: string;
           trading_pair_id: string;
           status: string;
+          market: string;
         }[]
-      >`SELECT id,user_id ,status, trading_pair_id 
-      FROM orders WHERE id = ${orderId}::uuid
-       FOR UPDATE`;
+      >`SELECT o.id, o.user_id, o.status, o.trading_pair_id,
+               tp.symbol as market
+        FROM orders o
+        JOIN trading_pairs tp ON tp.id = o.trading_pair_id
+        WHERE o.id = ${orderId}::uuid
+        FOR UPDATE`;
 
       const order = rows[0];
       if (!order || order.user_id !== userId)
@@ -193,7 +197,8 @@ export class OrdersService {
         OrderStatus.OPEN,
         OrderStatus.PARTIALLY_FILLED,
       ];
-      if (!cancellableStatuses.includes(order.status as OrderStatus))
+      const statusUpper = order.status.toUpperCase() as OrderStatus;
+      if (!cancellableStatuses.includes(statusUpper))
         throw new OrderNotCancellableException();
 
       //update order status
@@ -218,6 +223,7 @@ export class OrdersService {
           occurredAt: new Date(),
           payload: {
             tradingPairId: order.trading_pair_id,
+            market: order.market,
             orderId,
             userId,
             requestedBy: 'USER',

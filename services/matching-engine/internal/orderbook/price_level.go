@@ -37,10 +37,15 @@ func (pl *PriceLevel) Dequeue() *Order {
 	}
 	elem := pl.orders.Front()
 	order := elem.Value.(*Order)
-	pl.TotalQuantity = pl.TotalQuantity.Sub(order.RemainingQuantity)
+	// NOTE: TotalQuantity is managed by PartialFill — do NOT subtract here
 	pl.orders.Remove(elem)
 	delete(pl.orderMap, order.OrderID)
 	return order
+}
+
+// PartialFill decrements TotalQuantity when a resting order is partially filled.
+func (pl *PriceLevel) PartialFill(qty fixed.Decimal) {
+	pl.TotalQuantity = pl.TotalQuantity.Sub(qty)
 }
 
 func (pl *PriceLevel) Remove(orderID string) *Order {

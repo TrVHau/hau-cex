@@ -7,7 +7,11 @@ import { Redis } from 'ioredis';
       provide: 'REDIS_CLIENT',
       useFactory: () => {
         const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-        return new Redis(redisUrl);
+        const client = new Redis(redisUrl);
+        client.on('error', (err) =>
+          console.error('[Redis] connection error:', err),
+        );
+        return client;
       },
     },
   ],

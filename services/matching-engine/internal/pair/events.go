@@ -1,7 +1,7 @@
 package pair
 
 import (
-	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -224,8 +224,12 @@ func bookLevels(book orderbook.SideBook) [][3]string {
 		levels = append(levels, [3]string{
 			price,
 			level.TotalQuantity.String(),
-			fmt.Sprintf("%d", level.Count()),
+			strconv.Itoa(level.Count()),
 		})
 	}
+	// Sort by price string (fixed-point strings with same decimal places sort lexicographically correctly)
+	sort.Slice(levels, func(i, j int) bool {
+		return levels[i][0] < levels[j][0]
+	})
 	return levels
 }

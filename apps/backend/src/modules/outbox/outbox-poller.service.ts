@@ -44,18 +44,23 @@ export class OutboxPollerService
   private async pollLoop(): Promise<void> {
     while (this.running) {
       try {
-        await this.processBatch();
+        const hadWork = await this.processBatch();
+        // If no rows processed, back off briefly; otherwise drain immediately
+        if (!hadWork) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
       } catch (error) {
         this.logger.error('Outbox poll failed', error);
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
-  private async processBatch(): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<OutboxRow[]>`
+  private async processBatch(): Promise<boolean> {
+    // Step 1: Fetch and lock rows in a short Postgres-only transaction.
+    // No Redis calls here — Redis is NOT part of the Postgres transaction.
+    const rows = await this.prisma.$transaction(async (tx) => {
+      return tx.$queryRaw<OutboxRow[]>`
         SELECT id, message_id, stream_name, partition_key,
                command_sequence, message_type, payload, retry_count
         FROM outbox_events
@@ -65,46 +70,55 @@ export class OutboxPollerService
         LIMIT 50
         FOR UPDATE SKIP LOCKED
       `;
-
-      for (const row of rows) {
-        try {
-          await this.redis.xadd(
-            row.stream_name,
-            '*',
-            'messageId',
-            row.message_id,
-            'messageType',
-            row.message_type,
-            'partitionKey',
-            row.partition_key ?? '',
-            'commandSeq',
-            row.command_sequence?.toString() ?? '',
-            'payload',
-            JSON.stringify(row.payload),
-          );
-
-          await tx.$executeRaw`
-            UPDATE outbox_events
-            SET status = 'PUBLISHED'::outbox_status,
-                published_at = NOW()
-            WHERE id = ${row.id}::uuid
-          `;
-        } catch (error) {
-          const delaySeconds = [1, 2, 4, 8, 16][row.retry_count] ?? 32;
-
-          await tx.$executeRaw`
-            UPDATE outbox_events
-            SET retry_count = retry_count + 1,
-                last_error = ${String(error)},
-                next_retry_at = NOW() + (${delaySeconds} * INTERVAL '1 second'),
-                status = CASE
-                  WHEN retry_count + 1 >= 5 THEN 'FAILED'::outbox_status
-                  ELSE status
-                END
-            WHERE id = ${row.id}::uuid
-          `;
-        }
-      }
     });
+
+    if (rows.length === 0) return false;
+
+    // Step 2 & 3: Publish to Redis, then update Postgres — both outside the lock tx.
+    // If Redis succeeds but Postgres update fails, the row stays PENDING and will be
+    // retried; the engine-event consumer's processedEvent idempotency guard prevents
+    // double-processing on re-delivery.
+    for (const row of rows) {
+      try {
+        await this.redis.xadd(
+          row.stream_name,
+          '*',
+          'messageId',
+          row.message_id,
+          'messageType',
+          row.message_type,
+          'partitionKey',
+          row.partition_key ?? '',
+          'commandSeq',
+          row.command_sequence?.toString() ?? '',
+          'payload',
+          JSON.stringify(row.payload),
+        );
+
+        await this.prisma.$executeRaw`
+          UPDATE outbox_events
+          SET status = 'PUBLISHED'::outbox_status,
+              published_at = NOW()
+          WHERE id = ${row.id}::uuid
+        `;
+      } catch (error) {
+        // Exponential backoff: 1, 2, 4, 8, 16, 32 seconds (capped at 32)
+        const delaySeconds = Math.min(Math.pow(2, row.retry_count), 32);
+
+        await this.prisma.$executeRaw`
+          UPDATE outbox_events
+          SET retry_count = retry_count + 1,
+              last_error = ${String(error)},
+              next_retry_at = NOW() + (${delaySeconds} * INTERVAL '1 second'),
+              status = CASE
+                WHEN retry_count + 1 >= 5 THEN 'FAILED'::outbox_status
+                ELSE status
+              END
+          WHERE id = ${row.id}::uuid
+        `;
+      }
+    }
+
+    return true;
   }
 }

@@ -95,7 +95,18 @@ export class EngineEventConsumerService
   ): Promise<void> {
     const messageId = fields.messageId;
     const messageType = fields.messageType;
-    const payload = JSON.parse(fields.payload) as Record<string, unknown>;
+
+    // Guard against malformed payload — ACK to prevent infinite PEL loop
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(fields.payload ?? '{}') as Record<string, unknown>;
+    } catch {
+      this.logger.error(
+        `Malformed JSON payload for msg ${msgId} (type=${messageType}), acknowledging to prevent loop`,
+      );
+      await this.ack(msgId);
+      return;
+    }
 
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.processedEvent.findUnique({
@@ -109,8 +120,9 @@ export class EngineEventConsumerService
 
       if (existing) return;
 
+      // Use || (not ??) so empty string also falls back to partitionKey
       const tradingPairId =
-        (payload.tradingPairId as string) ?? fields.partitionKey;
+        (payload.tradingPairId as string | undefined) || fields.partitionKey;
       await this.dispatch(messageType, tradingPairId, payload, tx);
 
       await tx.processedEvent.create({
@@ -127,6 +139,7 @@ export class EngineEventConsumerService
     await this.ack(msgId);
   }
 
+
   private async dispatch(
     messageType: string,
     tradingPairId: string,
@@ -135,7 +148,7 @@ export class EngineEventConsumerService
   ): Promise<void> {
     switch (messageType) {
       case 'MarketOpened':
-        await tx.tradingPair.update({
+        await tx.tradingPair.updateMany({
           where: { id: tradingPairId },
           data: { status: 'READY' },
         });
@@ -162,11 +175,12 @@ export class EngineEventConsumerService
         break;
 
       case 'EngineFailed':
-        await tx.tradingPair.update({
+        await tx.tradingPair.updateMany({
           where: { id: tradingPairId },
           data: { status: 'SUSPENDED' },
         });
         break;
+
 
       case 'TradeCreated':
       case 'OrderCancelled':

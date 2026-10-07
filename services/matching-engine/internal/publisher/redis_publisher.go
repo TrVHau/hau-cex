@@ -23,6 +23,9 @@ func New(client *redis.Client) *Publisher {
 }
 
 func (p *Publisher) PublishBatch(ctx context.Context, events []message.EventEnvelope) error {
+	if len(events) == 0 {
+		return nil
+	}
 	pipe := p.client.Pipeline()
 	for _, event := range events {
 		payload, err := json.Marshal(event.Payload)
@@ -40,6 +43,15 @@ func (p *Publisher) PublishBatch(ctx context.Context, events []message.EventEnve
 			},
 		})
 	}
-	_, err := pipe.Exec(ctx)
-	return err
+	cmds, err := pipe.Exec(ctx)
+	if err != nil {
+		// Check per-command errors to surface partial failures
+		for _, cmd := range cmds {
+			if cmdErr := cmd.Err(); cmdErr != nil && cmdErr != redis.Nil {
+				return fmt.Errorf("pipeline xadd failed: %w", cmdErr)
+			}
+		}
+		return fmt.Errorf("pipeline exec: %w", err)
+	}
+	return nil
 }

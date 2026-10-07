@@ -7,11 +7,11 @@ type PriceHeap struct {
 	max    bool
 }
 
-func (h PriceHeap) Len() int {
+func (h *PriceHeap) Len() int {
 	return len(h.levels)
 }
 
-func (h PriceHeap) Less(i, j int) bool {
+func (h *PriceHeap) Less(i, j int) bool {
 	comparison := h.levels[i].Price.Cmp(h.levels[j].Price)
 	if h.max {
 		return comparison > 0

@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { nextCommandSequence } from '../../common/helpers/sequence.helper';
 import { v7 as uuidv7 } from 'uuid';
@@ -18,7 +17,7 @@ export class OpenMarketBootstrapService implements OnApplicationBootstrap {
 
   private async bootstrapMarkets(): Promise<void> {
     const pairs = await this.prisma.tradingPair.findMany({
-      where: { status: { not: 'READY' } },
+      where: { status: 'RECOVERING' },
     });
 
     for (const pair of pairs) {

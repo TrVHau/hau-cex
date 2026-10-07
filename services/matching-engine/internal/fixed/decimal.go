@@ -40,10 +40,15 @@ func (d Decimal) IsZero() bool {
 
 // parse tu string "1.5000000000000000"
 func Parse(s string) (Decimal, error) {
+	negative := strings.HasPrefix(s, "-")
+	if negative {
+		s = s[1:]
+	}
+
 	parts := strings.SplitN(s, ".", 2)
 	intPart := new(big.Int)
 	if _, ok := intPart.SetString(parts[0], 10); !ok {
-		return Zero(), fmt.Errorf("invalid decima: %s", s)
+		return Zero(), fmt.Errorf("invalid decimal: %s", s)
 	}
 
 	raw := new(big.Int).Mul(intPart, scaleInt)
@@ -59,6 +64,10 @@ func Parse(s string) (Decimal, error) {
 			return Zero(), fmt.Errorf("invalid decimal fraction: %s", s)
 		}
 		raw.Add(raw, fracInt)
+	}
+
+	if negative {
+		raw.Neg(raw)
 	}
 	return Decimal{raw: raw}, nil
 }

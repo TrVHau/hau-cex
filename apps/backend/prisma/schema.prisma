@@ -294,7 +294,7 @@ model Trade {
   sellerFeeAmount  Decimal   @map("seller_fee_amount") @db.Decimal(38, 18)
   sequence         BigInt    @db.BigInt
   matchedAt        DateTime  @map("matched_at") @db.Timestamptz(6)
-  settledAt        DateTime  @map("settled_at") @db.Timestamptz(6)
+  settledAt        DateTime? @map("settled_at") @db.Timestamptz(6)
 
   tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Restrict, map: "fk_trades_trading_pair")
   buyOrder    Order       @relation("BuyOrder", fields: [buyOrderId], references: [id], onDelete: Restrict, map: "fk_trades_buy_order")

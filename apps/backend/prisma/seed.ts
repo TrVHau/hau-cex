@@ -119,7 +119,7 @@ async function main() {
       minNotional: '5.00',
       makerFeeRate: '0.001',
       takerFeeRate: '0.001',
-      status: TradingPairStatus.READY,
+      status: TradingPairStatus.RECOVERING,
     },
   });
 

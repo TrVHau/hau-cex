@@ -12,7 +12,6 @@ import { OrderListQueryDto } from './dto/order-list-query.dto';
 import { encodeCursor, decodeCursor } from '../../common/helpers/cursor.helper';
 import { formatDecimal } from '../../common/helpers/decimal.helper';
 
-
 // ─── Kiểu Prisma inferred cho Order kèm tradingPair ────────────────────────
 type OrderWithPair = Prisma.OrderGetPayload<{
   include: { tradingPair: { select: { symbol: true } } };
@@ -99,13 +98,13 @@ export class OrderQueryService {
     orderId: string,
   ): Promise<OrderResponseDto> {
     const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+      where: { id: orderId, userId },
       include: {
         tradingPair: { select: { symbol: true } },
       },
     });
 
-    if (!order || order.userId !== userId) {
+    if (!order) {
       throw new NotFoundException(`Order not found`);
     }
 

@@ -24,12 +24,13 @@ type MatchResult struct {
 func Match(book *orderbook.OrderBook, incoming *orderbook.Order) MatchResult {
 	var trades []TradeResult
 	matchIndex := 0
+	isIncomingBuy := incoming.Side == orderbook.Buy
 
 	for !incoming.RemainingQuantity.IsZero() {
 		// láy best opposite
 		var bestPrice fixed.Decimal
 		var hasBest bool
-		if incoming.Side == orderbook.Buy {
+		if isIncomingBuy {
 			bestPrice, hasBest = book.Asks.BestPrice()
 		} else {
 			bestPrice, hasBest = book.Bids.BestPrice()
@@ -39,19 +40,22 @@ func Match(book *orderbook.OrderBook, incoming *orderbook.Order) MatchResult {
 		}
 
 		// price cross check
-		if incoming.Side == orderbook.Buy && incoming.Price.Cmp(bestPrice) < 0 {
+		if isIncomingBuy && incoming.Price.Cmp(bestPrice) < 0 {
 			break
 		}
-		if incoming.Side == orderbook.Sell && incoming.Price.Cmp(bestPrice) > 0 {
+		if !isIncomingBuy && incoming.Price.Cmp(bestPrice) > 0 {
 			break
 		}
 
 		// lấy resting order FIFO
 		var level *orderbook.PriceLevel
-		if incoming.Side == orderbook.Buy {
+		if isIncomingBuy {
 			level = book.Asks.Levels()[bestPrice.String()]
 		} else {
 			level = book.Bids.Levels()[bestPrice.String()]
+		}
+		if level == nil {
+			break
 		}
 		resting := level.Front()
 
@@ -61,14 +65,14 @@ func Match(book *orderbook.OrderBook, incoming *orderbook.Order) MatchResult {
 		// update quantities
 		incoming.RemainingQuantity = incoming.RemainingQuantity.Sub(executedQuantity)
 		resting.RemainingQuantity = resting.RemainingQuantity.Sub(executedQuantity)
-		level.TotalQuantity = level.TotalQuantity.Sub(executedQuantity)
+		level.PartialFill(executedQuantity) // always decrement level total
 
 		restingFull := resting.RemainingQuantity.IsZero()
 		if restingFull {
 			level.Dequeue()
 			delete(book.ActiveOrders, resting.OrderID)
 			if level.IsEmpty() {
-				if incoming.Side == orderbook.Buy {
+				if isIncomingBuy {
 					book.Asks.RemoveLevelIfEmpty(bestPrice)
 				} else {
 					book.Bids.RemoveLevelIfEmpty(bestPrice)
