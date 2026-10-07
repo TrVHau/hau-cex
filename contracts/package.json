@@ -6,14 +6,20 @@
   "scripts": {
     "build": "hardhat compile",
     "compile": "hardhat compile",
-    "test": "hardhat test",
+    "test": "mocha",
     "node": "hardhat node",
     "clean": "hardhat clean",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^4.0.15",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.20.0",
+    "chai": "^4.5.0",
+    "ethers": "^6.17.0",
     "hardhat": "^3.9.1",
+    "mocha": "^11.7.6",
+    "tsx": "^4.23.1",
     "typescript": "~6.0.3"
   },
   "dependencies": {

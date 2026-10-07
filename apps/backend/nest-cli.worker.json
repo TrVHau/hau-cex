@@ -6,5 +6,8 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "tsConfigPath": "tsconfig.worker.json"
-  }
+  },
+  "assets": [
+    { "include": "generated/**/*", "outDir": "./dist/worker" }
+  ]
 }
