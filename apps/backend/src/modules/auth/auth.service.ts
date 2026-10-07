@@ -97,13 +97,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (user.status === UserStatus.LOCKED) {
+      throw new ForbiddenException('Account has been locked');
+    }
+
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
       throw new UnauthorizedException('Invalid credentials');
-    }
-
-    if (user.status === UserStatus.LOCKED) {
-      throw new ForbiddenException('Account has been locked');
     }
 
     await this.prisma.user.update({
@@ -244,22 +244,28 @@ export class AuthService {
 
     const sessionId = uuidv7();
 
-    const payload: JwtRefreshPayload = {
+    const payload: Omit<JwtRefreshPayload, 'type'> = {
       sub: user.id,
       email: user.email,
       role: user.role,
-      sessionId: sessionId,
+      sessionId,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payload, {
-        secret: this.jwtAccessSecret,
-        expiresIn: this.accessTokenExpiresIn,
-      }),
-      this.jwtService.signAsync(payload, {
-        secret: this.jwtRefreshSecret,
-        expiresIn: this.refreshTokenExpiresIn,
-      }),
+      this.jwtService.signAsync(
+        { ...payload, type: 'access' },
+        {
+          secret: this.jwtAccessSecret,
+          expiresIn: this.accessTokenExpiresIn,
+        },
+      ),
+      this.jwtService.signAsync(
+        { ...payload, type: 'refresh' },
+        {
+          secret: this.jwtRefreshSecret,
+          expiresIn: this.refreshTokenExpiresIn,
+        },
+      ),
     ]);
 
     const refreshTokenHash = await bcrypt.hash(

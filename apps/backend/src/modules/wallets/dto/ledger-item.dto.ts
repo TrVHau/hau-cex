@@ -1,12 +1,15 @@
+import { ReferenceType } from '../../../common/enums/reference-type.enum';
+import { LedgerEntryType } from '../../../generated/prisma';
+
 export type LedgerItemDto = {
   id: string;
-  entryType: string; // LedgerEntryType
+  entryType: LedgerEntryType;
   balanceType: string; // Available or Locked
   amount: string; // Decimal(18)
   beforeBalance: string; // Decimal(18)
   afterBalance: string; // Decimal(18)
   assetSymbol: string;
-  referenceType: string; // ReferenceType
+  referenceType: ReferenceType; // ReferenceType
   referenceId: string;
   operationId: string;
   createdAt: string; // ISO string representation of Date

@@ -42,6 +42,17 @@ services:
       retries: 10
       start_period: 5s
 
+  matching-engine:
+    build:
+      context: ./services/matching-engine
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

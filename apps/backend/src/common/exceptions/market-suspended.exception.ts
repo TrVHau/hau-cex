@@ -1,12 +1,12 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
-export class MarketNotReadyException extends HttpException {
+export class MarketSuspendedException extends HttpException {
   constructor() {
     super(
       {
         error: {
-          code: 'MARKET_NOT_READY',
-          message: 'The specified market is not ready for trading.',
+          code: 'MARKET_SUSPENDED',
+          message: 'The specified market is suspended.',
         },
       },
       HttpStatus.UNPROCESSABLE_ENTITY, // 422

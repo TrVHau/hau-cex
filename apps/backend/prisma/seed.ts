@@ -119,9 +119,18 @@ async function main() {
       minNotional: '5.00',
       makerFeeRate: '0.001',
       takerFeeRate: '0.001',
-      status: TradingPairStatus.READY,
+      status: TradingPairStatus.RECOVERING,
     },
   });
+
+  const safeId = pair.id.replace(/-/g, '_');
+  await prisma.$executeRawUnsafe(`
+    CREATE SEQUENCE IF NOT EXISTS order_seq_${safeId} START 1;
+    CREATE SEQUENCE IF NOT EXISTS cmd_seq_${safeId} START 1;
+  `);
+  console.log(
+    `Created sequences for trading pair ${pair.symbol}: order_seq_${safeId}, cmd_seq_${safeId}`,
+  );
 
   await prisma.orderSequence.upsert({
     where: { tradingPairId: pair.id },
@@ -165,7 +174,7 @@ async function main() {
         amount: new Decimal('1000000'),
         beforeBalance: new Decimal('0'),
         afterBalance: new Decimal('1000000'),
-        referenceType: 'SYSTEM_SEED',
+        referenceType: 'SYSTEM',
         referenceId: treasury.id,
         operationId: opId(1),
       },
@@ -196,7 +205,7 @@ async function main() {
           amount: new Decimal('10000'),
           beforeBalance: new Decimal('0'),
           afterBalance: new Decimal('10000'),
-          referenceType: 'SYSTEM_SEED',
+          referenceType: 'SYSTEM',
           referenceId: alice.id,
           operationId: opId(10),
         },
@@ -280,7 +289,7 @@ async function main() {
           amount: new Decimal('0'),
           beforeBalance: new Decimal('0'),
           afterBalance: new Decimal('0'),
-          referenceType: 'SYSTEM_SEED',
+          referenceType: 'SYSTEM',
           referenceId: alice.id,
           operationId: opId(13),
         },
@@ -325,7 +334,7 @@ async function main() {
           amount: new Decimal('5000'),
           beforeBalance: new Decimal('0'),
           afterBalance: new Decimal('5000'),
-          referenceType: 'SYSTEM_SEED',
+          referenceType: 'SYSTEM',
           referenceId: bob.id,
           operationId: opId(20),
         },
@@ -409,7 +418,7 @@ async function main() {
           amount: new Decimal('1'),
           beforeBalance: new Decimal('0'),
           afterBalance: new Decimal('1'),
-          referenceType: 'SYSTEM_SEED',
+          referenceType: 'SYSTEM',
           referenceId: bob.id,
           operationId: opId(23),
         },

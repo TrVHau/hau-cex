@@ -7,6 +7,7 @@ import { WalletResponseDto } from './dto/wallet-response.dto';
 import { LedgerItemDto } from './dto/ledger-item.dto';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { decodeCursor, encodeCursor } from '../../common/helpers/cursor.helper';
+import { ReferenceType } from '../../common/enums/reference-type.enum';
 
 type WalletWithAsset = Prisma.WalletGetPayload<{
   include: {
@@ -30,7 +31,7 @@ type LedgerWithAsset = Prisma.LedgerEntryGetPayload<{
 }>;
 
 @Injectable()
-export class WalletService {
+export class WalletsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getMyWallets(userId: string): Promise<WalletResponseDto[]> {
@@ -94,7 +95,9 @@ export class WalletService {
     const wallet = await this.prisma.wallet.findFirst({
       where: {
         userId,
-        asset: { symbol: { equals: assetSymbol, mode: 'insensitive' } },
+        asset: {
+          symbol: { equals: assetSymbol.toUpperCase(), mode: 'insensitive' },
+        },
       },
     });
 
@@ -146,7 +149,7 @@ export class WalletService {
       beforeBalance: formatDecimal(row.beforeBalance),
       afterBalance: formatDecimal(row.afterBalance),
       assetSymbol: row.asset.symbol,
-      referenceType: row.referenceType,
+      referenceType: row.referenceType as ReferenceType,
       referenceId: row.referenceId,
       operationId: row.operationId,
       createdAt: row.createdAt.toISOString(),
