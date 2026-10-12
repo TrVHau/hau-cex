@@ -30,8 +30,8 @@ export const mochaHooks = {
       configPath,
     );
 
-    // Hardhat 3: ethers nằm ở hre.network.connect().ethers
-    const conn = await hre.network.connect();
+    // Hardhat 3: ethers nằm ở hre.network.getOrCreate().ethers
+    const conn = await hre.network.getOrCreate();
 
     (globalThis as any).__hre    = hre;
     (globalThis as any).__ethers = conn.ethers;

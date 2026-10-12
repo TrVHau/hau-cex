@@ -5,8 +5,7 @@
  * Import từ file này thay vì dùng hre trực tiếp.
  */
 
-import type { HardhatEthers } from "@nomicfoundation/hardhat-ethers";
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import type { HardhatEthers, HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types";
 
 // Lấy ethers từ global được inject bởi setup.ts
 function getEthers(): HardhatEthers {
@@ -23,6 +22,6 @@ export async function getSigners(): Promise<HardhatEthersSigner[]> {
   return getEthers().getSigners();
 }
 
-export async function getContractFactory(name: string) {
+export async function getContractFactory(name: string): Promise<any> {
   return getEthers().getContractFactory(name);
 }

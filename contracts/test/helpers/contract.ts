@@ -13,15 +13,18 @@
  */
 
 import { expect } from "chai";
-import type { HardhatEthers } from "@nomicfoundation/hardhat-ethers";
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-import type { ContractTransactionResponse, BaseContract } from "ethers";
+import type {
+  HardhatEthers,
+  HardhatEthersSigner,
+} from "@nomicfoundation/hardhat-ethers/types";
+import type { BaseContract } from "ethers";
 
 // ─── HRE Access ──────────────────────────────────────────────────────────────
 
 function _ethers(): HardhatEthers {
   const e = (globalThis as any).__ethers;
-  if (!e) throw new Error("[setup] HRE not initialized — is test/setup.ts loaded?");
+  if (!e)
+    throw new Error("[setup] HRE not initialized — is test/setup.ts loaded?");
   return e;
 }
 
@@ -37,7 +40,7 @@ export async function getSigners(): Promise<HardhatEthersSigner[]> {
   return _ethers().getSigners();
 }
 
-export async function getFactory(name: string) {
+export async function getFactory(name: string): Promise<any> {
   return _ethers().getContractFactory(name);
 }
 
@@ -83,10 +86,15 @@ export async function assertReverts(
     // hoặc Error object có errorName
     const errorName: string = err?.errorName ?? err?.revert?.name ?? "";
     if (errorName) {
-      expect(errorName, `Expected error "${expectedErrorName}" but got "${errorName}"`).to.equal(expectedErrorName);
+      expect(
+        errorName,
+        `Expected error "${expectedErrorName}" but got "${errorName}"`,
+      ).to.equal(expectedErrorName);
     } else if (msg) {
-      expect(msg, `Expected revert with "${expectedErrorName}" but got: ${msg}`)
-        .to.include(expectedErrorName);
+      expect(
+        msg,
+        `Expected revert with "${expectedErrorName}" but got: ${msg}`,
+      ).to.include(expectedErrorName);
     }
     if (args.length > 0 && (err?.revert?.args || err?.errorArgs)) {
       const actualArgs = err?.revert?.args ?? err?.errorArgs ?? [];
@@ -95,7 +103,10 @@ export async function assertReverts(
       }
     }
   }
-  expect(caught, `Expected tx to revert with "${expectedErrorName}" but it succeeded`).to.equal(true);
+  expect(
+    caught,
+    `Expected tx to revert with "${expectedErrorName}" but it succeeded`,
+  ).to.equal(true);
 }
 
 /**
@@ -113,7 +124,8 @@ export function assertEmitted(
 ): void {
   const iface = contract.interface;
   const eventFragment = iface.getEvent(eventName);
-  expect(eventFragment, `Event "${eventName}" not found in contract ABI`).to.not.be.null;
+  expect(eventFragment, `Event "${eventName}" not found in contract ABI`).to.not
+    .be.null;
 
   const found = (receipt?.logs ?? []).find((log: any) => {
     try {
@@ -129,7 +141,7 @@ export function assertEmitted(
   if (expectedArgs && found) {
     const parsed = iface.parseLog(found)!;
     for (let i = 0; i < expectedArgs.length; i++) {
-      const actual   = parsed.args[i];
+      const actual = parsed.args[i];
       const expected = expectedArgs[i];
       expect(
         actual?.toString?.() ?? actual,
