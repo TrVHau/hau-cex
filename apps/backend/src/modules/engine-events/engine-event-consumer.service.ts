@@ -139,7 +139,6 @@ export class EngineEventConsumerService
     await this.ack(msgId);
   }
 
-
   private async dispatch(
     messageType: string,
     tradingPairId: string,
@@ -180,7 +179,6 @@ export class EngineEventConsumerService
           data: { status: 'SUSPENDED' },
         });
         break;
-
 
       case 'TradeCreated':
       case 'OrderCancelled':
