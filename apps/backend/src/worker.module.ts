@@ -5,7 +5,7 @@ import { PrismaModule } from './core/prisma/prisma.module';
 import { RedisModule } from './core/redis/redis.module';
 import { OutboxPollerService } from './modules/outbox/outbox-poller.service';
 import { OpenMarketBootstrapService } from './modules/engine/open-market.bootstrap.service';
-import { EngineEventConsumerService } from './modules/engine-events/engine-event-consumer.service';
+import { EngineEventsModule } from './modules/engine-events/engine-events.module';
 
 @Module({
   imports: [
@@ -15,12 +15,11 @@ import { EngineEventConsumerService } from './modules/engine-events/engine-event
     }),
     PrismaModule,
     RedisModule,
+    EngineEventsModule,
   ],
-  controllers: [],
   providers: [
     OutboxPollerService,
     OpenMarketBootstrapService,
-    EngineEventConsumerService,
   ],
 })
 export class WorkerModule {}

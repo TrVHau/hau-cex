@@ -7,6 +7,13 @@ import {
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { TradeSettlementService } from './trade-settlement.service';
+import { OrderCancellationService } from './order-cancellation.service';
+import {
+  TradeCreatedPayload,
+  OrderCancelledPayload,
+  CancelOrderRejectedPayload,
+} from './types/engine-events.types';
 
 const ENGINE_EVENTS_STREAM = 'stream:engine:events';
 const CONSUMER_GROUP = 'backend-engine-events-v1';
@@ -22,6 +29,8 @@ export class EngineEventConsumerService
   constructor(
     private readonly prisma: PrismaService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
+    private readonly tradeSettlementService: TradeSettlementService,
+    private readonly orderCancellationService: OrderCancellationService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -123,7 +132,7 @@ export class EngineEventConsumerService
       // Use || (not ??) so empty string also falls back to partitionKey
       const tradingPairId =
         (payload.tradingPairId as string | undefined) || fields.partitionKey;
-      await this.dispatch(messageType, tradingPairId, payload, tx);
+      await this.dispatch(messageType, tradingPairId, messageId, payload, tx);
 
       await tx.processedEvent.create({
         data: {
@@ -142,6 +151,7 @@ export class EngineEventConsumerService
   private async dispatch(
     messageType: string,
     tradingPairId: string,
+    messageId: string,
     payload: Record<string, unknown>,
     tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
   ): Promise<void> {
@@ -181,12 +191,29 @@ export class EngineEventConsumerService
         break;
 
       case 'TradeCreated':
-      case 'OrderCancelled':
-      case 'CancelOrderRejected':
-      case 'OrderBookChanged':
-        this.logger.log(
-          `${messageType} received — Phase 7 will handle settlement`,
+        await this.tradeSettlementService.settleTrade(
+          payload as unknown as TradeCreatedPayload,
+          messageId,
+          tx,
         );
+        break;
+
+      case 'OrderCancelled':
+        await this.orderCancellationService.handleOrderCancelled(
+          payload as unknown as OrderCancelledPayload,
+          tx,
+        );
+        break;
+
+      case 'CancelOrderRejected':
+        await this.orderCancellationService.handleCancelOrderRejected(
+          payload as unknown as CancelOrderRejectedPayload,
+          tx,
+        );
+        break;
+
+      case 'OrderBookChanged':
+        // Phase 7B — will broadcast via WebSocket
         break;
 
       default:
