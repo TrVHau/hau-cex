@@ -69,8 +69,9 @@ export class TradeSettlementService {
     ]);
 
     // 4. Create Trade record (engineMatchId UNIQUE → idempotent)
-    await tx.trade.create({
+    const trade = await tx.trade.create({
       data: {
+        id: payload.tradeId || undefined,
         engineMatchId: payload.engineMatchId,
         engineMessageId: messageId,
         tradingPairId: payload.tradingPairId,
@@ -128,7 +129,7 @@ export class TradeSettlementService {
     const operationId = uuidv7();
     const tradeRef = {
       referenceType: ReferenceType.TRADE,
-      referenceId: payload.engineMatchId,
+      referenceId: trade.id,
     } as const;
 
     // 6a. Buyer: debit locked QUOTE (price * qty already locked at order time)

@@ -1,6 +1,7 @@
 package fixed
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -108,4 +109,24 @@ func Min(a, b Decimal) Decimal {
 		return a
 	}
 	return b
+}
+
+// UnmarshalJSON accepts a JSON string or number, e.g. "50000" or 50000.
+func (d *Decimal) UnmarshalJSON(data []byte) error {
+	// strip surrounding quotes if present
+	s := string(data)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	parsed, err := Parse(s)
+	if err != nil {
+		return fmt.Errorf("fixed.Decimal UnmarshalJSON: %w", err)
+	}
+	*d = parsed
+	return nil
+}
+
+// MarshalJSON emits the decimal as a JSON string to preserve full precision.
+func (d Decimal) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
 }

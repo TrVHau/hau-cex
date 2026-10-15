@@ -106,7 +106,7 @@ async function main() {
 
   const pair = await prisma.tradingPair.upsert({
     where: { symbol: 'BTC_USDT' },
-    update: {},
+    update: { status: TradingPairStatus.RECOVERING }, // always reset on re-seed
     create: {
       symbol: 'BTC_USDT',
       baseAssetId: btc.id,

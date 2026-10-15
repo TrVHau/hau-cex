@@ -58,6 +58,13 @@ export class EngineEventConsumerService
       }
     }
 
+    // Drain any unacknowledged events in PEL before listening for new events
+    try {
+      await this.drainPending();
+    } catch (error) {
+      this.logger.error('Failed to drain pending engine events', error);
+    }
+
     while (this.running) {
       try {
         await this.processBatch();
@@ -69,8 +76,33 @@ export class EngineEventConsumerService
     }
   }
 
+  private async drainPending(): Promise<void> {
+    while (this.running) {
+      const result = (await this.redis.xreadgroup(
+        'GROUP',
+        CONSUMER_GROUP,
+        CONSUMER_NAME,
+        'COUNT',
+        '10',
+        'STREAMS',
+        ENGINE_EVENTS_STREAM,
+        '0',
+      )) as [string, [string, string[]][]][] | null;
+
+      if (!result || result.length === 0 || !result[0][1] || result[0][1].length === 0) {
+        break;
+      }
+
+      for (const [, messages] of result) {
+        for (const [msgId, fieldArray] of messages) {
+          await this.handleMessage(msgId, this.parseFieldArray(fieldArray));
+        }
+      }
+    }
+  }
+
   private async processBatch(): Promise<void> {
-    const result = await this.redis.xreadgroup(
+    const result = (await this.redis.xreadgroup(
       'GROUP',
       CONSUMER_GROUP,
       CONSUMER_NAME,
@@ -81,21 +113,25 @@ export class EngineEventConsumerService
       'STREAMS',
       ENGINE_EVENTS_STREAM,
       '>',
-    );
+    )) as [string, [string, string[]][]][] | null;
 
     if (!result) return;
 
     for (const [, messages] of result) {
       for (const [msgId, fieldArray] of messages) {
-        const fields: Record<string, string> = {};
-        if (fieldArray) {
-          for (let i = 0; i < fieldArray.length; i += 2) {
-            fields[fieldArray[i]] = fieldArray[i + 1] ?? '';
-          }
-        }
-        await this.handleMessage(msgId, fields);
+        await this.handleMessage(msgId, this.parseFieldArray(fieldArray));
       }
     }
+  }
+
+  private parseFieldArray(fieldArray: string[]): Record<string, string> {
+    const fields: Record<string, string> = {};
+    if (fieldArray) {
+      for (let i = 0; i < fieldArray.length; i += 2) {
+        fields[fieldArray[i]] = fieldArray[i + 1] ?? '';
+      }
+    }
+    return fields;
   }
 
   private async handleMessage(

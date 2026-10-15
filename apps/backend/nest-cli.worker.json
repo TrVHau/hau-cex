@@ -4,10 +4,9 @@
   "sourceRoot": "src",
   "entryFile": "main-worker",
   "compilerOptions": {
-    "deleteOutDir": true,
-    "tsConfigPath": "tsconfig.worker.json"
-  },
-  "assets": [
-    { "include": "generated/**/*", "outDir": "./dist/worker" }
-  ]
+    "tsConfigPath": "tsconfig.worker.json",
+    "assets": [
+      { "include": "generated/**/*", "watchAssets": false }
+    ]
+  }
 }
