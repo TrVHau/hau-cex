@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Controller,
   Get,
   HttpCode,
@@ -13,14 +12,16 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  ValidationException,
+  type AuthenticatedUser,
+} from '../../common';
 import { ActiveOrderQueryDto } from './dto/active-order-query.dto';
 import { OrderListQueryDto } from './dto/order-list-query.dto';
 import { OrderQueryService } from './order-query.service';
 import { OrdersService } from './orders.service';
-
 import { CreateOrderDto } from './dto/create-order.dto';
-import type { AuthenticatedUser } from '../../common/types/authenticated-user.type';
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
@@ -36,12 +37,7 @@ export class OrdersController {
     @Body() dto: CreateOrderDto,
   ) {
     if (!key?.trim()) {
-      throw new BadRequestException({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Idempotency-Key header is required',
-        },
-      });
+      throw new ValidationException('Idempotency-Key header is required');
     }
     return this.ordersService.placeOrder(user.userId, key, dto);
   }
@@ -68,6 +64,14 @@ export class OrdersController {
     @Param('orderId', ParseUUIDPipe) orderId: string,
   ) {
     return this.orderQueryService.getOrderById(user.userId, orderId);
+  }
+
+  @Get(':orderId/trades')
+  getOrderTrades(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+  ) {
+    return this.orderQueryService.getOrderTrades(user.userId, orderId);
   }
 
   @Post(':orderId/cancel')

@@ -10,3 +10,4 @@ contracts/cache/
 contracts/typechain-types/
 
 apps/backend/src/generated/prisma/
+services/matching-engine/engine

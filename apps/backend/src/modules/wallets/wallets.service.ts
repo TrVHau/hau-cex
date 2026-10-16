@@ -1,34 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Prisma, Wallet } from '../../generated/prisma';
-import { formatDecimal } from '../../common/helpers/decimal.helper';
+import {
+  buildCursorWhere,
+  buildPaginatedResult,
+  formatDecimal,
+  ReferenceType,
+  WalletNotFoundException,
+} from '../../common';
 import { LedgerQueryDto } from './dto/ledger-query.dto';
 import { LedgerPageDto } from './dto/ledger-page.dto';
 import { WalletResponseDto } from './dto/wallet-response.dto';
 import { LedgerItemDto } from './dto/ledger-item.dto';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { decodeCursor, encodeCursor } from '../../common/helpers/cursor.helper';
-import { ReferenceType } from '../../common/enums/reference-type.enum';
-
-type WalletWithAsset = Prisma.WalletGetPayload<{
-  include: {
-    asset: {
-      select: {
-        symbol: true;
-        name: true;
-      };
-    };
-  };
-}>;
-
-type LedgerWithAsset = Prisma.LedgerEntryGetPayload<{
-  include: {
-    asset: {
-      select: {
-        symbol: true;
-      };
-    };
-  };
-}>;
+import { WalletWithAsset, LedgerWithAsset } from './types';
 
 @Injectable()
 export class WalletsService {
@@ -48,23 +32,16 @@ export class WalletsService {
     userId: string,
     query: LedgerQueryDto,
   ): Promise<LedgerPageDto> {
-    const { asset, limit = 20, cursor } = query;
-    const decoded = cursor ? decodeCursor(cursor) : null;
+    const { assetSymbol, asset, limit = 20, cursor } = query;
+    const targetAsset = assetSymbol || asset;
+    const cursorFilter = buildCursorWhere(cursor);
 
     const where: Prisma.LedgerEntryWhereInput = {
       userId,
-      ...(asset && {
-        asset: { symbol: { equals: asset, mode: 'insensitive' } },
+      ...(targetAsset && {
+        asset: { symbol: { equals: targetAsset, mode: 'insensitive' } },
       }),
-      ...(decoded && {
-        OR: [
-          { createdAt: { lt: new Date(decoded.createdAt) } },
-          {
-            createdAt: { equals: new Date(decoded.createdAt) },
-            id: { lt: decoded.id },
-          },
-        ],
-      }),
+      ...(cursorFilter && { OR: cursorFilter.OR }),
     };
 
     const rows = await this.prisma.ledgerEntry.findMany({
@@ -76,15 +53,9 @@ export class WalletsService {
       take: limit + 1,
     });
 
-    const hasMore = rows.length > limit;
-    if (hasMore) {
-      rows.pop(); // remove the extra row used to check for more
-    }
-
-    return {
-      items: rows.map((row) => this.toLedgerItemDto(row)),
-      nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null,
-    };
+    return buildPaginatedResult(rows, limit, (row) =>
+      this.toLedgerItemDto(row),
+    );
   }
 
   // tra cứu ví nội bộ (throw lỗi nếu o thấy )
@@ -102,8 +73,8 @@ export class WalletsService {
     });
 
     if (!wallet) {
-      throw new NotFoundException(
-        `Wallet not found for user ${userId} and asset ${assetSymbol}`,
+      throw new WalletNotFoundException(
+        `user ${userId} and asset ${assetSymbol}`,
       );
     }
 
@@ -117,9 +88,7 @@ export class WalletsService {
     });
 
     if (!wallet) {
-      throw new NotFoundException(
-        `Wallet not found for user ${userId} and asset ${assetId}`,
-      );
+      throw new WalletNotFoundException(`user ${userId} and asset ${assetId}`);
     }
 
     return wallet;

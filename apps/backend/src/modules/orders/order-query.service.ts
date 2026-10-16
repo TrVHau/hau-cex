@@ -1,21 +1,20 @@
 // đọc và phân trang
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { OrderStatus, Prisma } from '../../generated/prisma';
-
+import {
+  buildCursorWhere,
+  buildPaginatedResult,
+  formatDecimal,
+  OrderNotFoundException,
+  OrderType,
+} from '../../common';
 import {
   OrderListResponseDto,
   OrderResponseDto,
 } from './dto/order-response.dto';
-import { OrderType } from '../../common/enums/order-type.enum';
 import { OrderListQueryDto } from './dto/order-list-query.dto';
-import { encodeCursor, decodeCursor } from '../../common/helpers/cursor.helper';
-import { formatDecimal } from '../../common/helpers/decimal.helper';
-
-// ─── Kiểu Prisma inferred cho Order kèm tradingPair ────────────────────────
-type OrderWithPair = Prisma.OrderGetPayload<{
-  include: { tradingPair: { select: { symbol: true } } };
-}>;
+import { OrderWithPair, OrderTradeItem } from './types';
 
 @Injectable()
 export class OrderQueryService {
@@ -56,20 +55,12 @@ export class OrderQueryService {
     query: OrderListQueryDto,
   ): Promise<OrderListResponseDto> {
     const { symbol, limit = 20, cursor } = query;
-    const decoded = cursor ? decodeCursor(cursor) : null;
+    const cursorFilter = buildCursorWhere(cursor);
 
     const where: Prisma.OrderWhereInput = {
       userId,
       ...(symbol && { tradingPair: { symbol } }),
-      ...(decoded && {
-        OR: [
-          { createdAt: { lt: new Date(decoded.createdAt) } },
-          {
-            createdAt: { equals: new Date(decoded.createdAt) },
-            id: { lt: decoded.id },
-          },
-        ],
-      }),
+      ...(cursorFilter && { OR: cursorFilter.OR }),
     };
 
     const rows = await this.prisma.order.findMany({
@@ -81,15 +72,7 @@ export class OrderQueryService {
       },
     });
 
-    const hasMore = rows.length > limit;
-    if (hasMore) {
-      rows.pop(); // xóa row thừa dùng để check hasMore
-    }
-
-    return {
-      items: rows.map((row) => this.toResponseDto(row)),
-      nextCursor: hasMore ? encodeCursor(rows[rows.length - 1]) : null,
-    };
+    return buildPaginatedResult(rows, limit, (row) => this.toResponseDto(row));
   }
 
   // lấy chi tiết 1 lệnh bằng id
@@ -105,10 +88,62 @@ export class OrderQueryService {
     });
 
     if (!order) {
-      throw new NotFoundException(`Order not found`);
+      throw new OrderNotFoundException();
     }
 
     return this.toResponseDto(order);
+  }
+
+  // lấy danh sách khớp lệnh (trades) của 1 lệnh
+  async getOrderTrades(
+    userId: string,
+    orderId: string,
+  ): Promise<OrderTradeItem[]> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+
+    if (!order) {
+      throw new OrderNotFoundException();
+    }
+
+    const trades = await this.prisma.trade.findMany({
+      where: {
+        OR: [{ buyOrderId: orderId }, { sellOrderId: orderId }],
+        settledAt: { not: null },
+      },
+      orderBy: { matchedAt: 'desc' },
+      select: {
+        id: true,
+        executionPrice: true,
+        executedQuantity: true,
+        quoteAmount: true,
+        buyerFeeAmount: true,
+        sellerFeeAmount: true,
+        takerSide: true,
+        matchedAt: true,
+        buyOrderId: true,
+        sellOrderId: true,
+      },
+    });
+
+    return trades.map((t) => {
+      const isBuyer = t.buyOrderId === orderId;
+      const isTaker =
+        (isBuyer && t.takerSide === 'BUY') ||
+        (!isBuyer && t.takerSide === 'SELL');
+      return {
+        id: t.id,
+        price: formatDecimal(t.executionPrice),
+        quantity: formatDecimal(t.executedQuantity),
+        quoteAmount: formatDecimal(t.quoteAmount),
+        fee: formatDecimal(isBuyer ? t.buyerFeeAmount : t.sellerFeeAmount),
+        role: isTaker ? 'TAKER' : 'MAKER',
+        takerSide: t.takerSide,
+        matchedAt: t.matchedAt.toISOString(),
+      };
+    });
   }
 
   // ─── Mapper ───────────────────────────────────────────────────────────────

@@ -4,23 +4,23 @@ import { WalletsService } from '../wallets/wallets.service';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderStatus, Prisma, TradingPairStatus } from '../../generated/prisma';
-import { hashOrderPayload } from '../../common/helpers/idempotency.helper';
 import {
+  ENGINE_COMMANDS_STREAM,
+  hashOrderPayload,
   IdempotencyConflictException,
   MarketNotFoundException,
   MarketNotReadyException,
   MarketSuspendedException,
-  OrderNotCancellableException,
-  OrderNotFoundException,
-  ValidationException,
-} from '../../common/exceptions';
-import { v7 as uuidv7 } from 'uuid';
-import { ReferenceType } from '../../common/enums/reference-type.enum';
-import {
   nextCommandSequence,
   nextOrderSequence,
-} from '../../common/helpers/sequence.helper';
-import { PrismaTx } from '../../common/types/prisma-tx.type';
+  OrderNotCancellableException,
+  OrderNotFoundException,
+  PrismaTx,
+  ReferenceType,
+  ValidationException,
+} from '../../common';
+import { v7 as uuidv7 } from 'uuid';
+import { CancelOrderRow } from './types';
 
 @Injectable()
 export class OrdersService {
@@ -143,7 +143,7 @@ export class OrdersService {
             messageId: uuidv7(),
             version: 1,
             correlationId: uuidv7(),
-            streamName: `stream:engine:commands`,
+            streamName: ENGINE_COMMANDS_STREAM,
             messageType: 'PlaceOrder',
             partitionKey: pair.id,
             commandSequence: cmdSeq,
@@ -173,13 +173,7 @@ export class OrdersService {
     return this.prismaService.$transaction(async (tx: PrismaTx) => {
       // lockrow to prevent race settle race condition
       const rows = await tx.$queryRaw<
-        {
-          id: string;
-          user_id: string;
-          trading_pair_id: string;
-          status: string;
-          market: string;
-        }[]
+        CancelOrderRow[]
       >`SELECT o.id, o.user_id, o.status, o.trading_pair_id,
                tp.symbol as market
         FROM orders o
@@ -216,7 +210,7 @@ export class OrdersService {
           messageId: uuidv7(),
           version: 1,
           correlationId: uuidv7(),
-          streamName: 'stream:engine:commands',
+          streamName: ENGINE_COMMANDS_STREAM,
           messageType: 'CancelOrder',
           partitionKey: order.trading_pair_id,
           commandSequence: cmdSeq,

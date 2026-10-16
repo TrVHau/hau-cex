@@ -1,25 +1,17 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import {
-  WalletMutationParams,
-  CreditParams,
-} from './types/wallet-mutation.params';
+import { Injectable, Logger } from '@nestjs/common';
+import { WalletMutationParams, CreditParams, WalletRawRow } from './types';
 import {
   LedgerEntryType,
   Prisma,
   Wallet,
   LedgerBalanceType,
 } from '../../generated/prisma';
-import { PrismaTx } from '../../common/types/prisma-tx.type';
-import { InsufficientBalanceException } from '../../common/exceptions/insufficient-balance.exception';
-import { InvalidAmountException } from '../../common/exceptions/invalid-amount.exception';
-
-interface WalletRawRow {
-  id: string;
-  userId: string;
-  assetId: string;
-  availableBalance: string;
-  lockedBalance: string;
-}
+import {
+  PrismaTx,
+  InsufficientBalanceException,
+  InvalidAmountException,
+  WalletNotFoundException,
+} from '../../common';
 
 @Injectable()
 export class WalletBalanceService {
@@ -246,7 +238,7 @@ export class WalletBalanceService {
     `;
 
     if (!rows[0]) {
-      throw new NotFoundException(`Wallet with id ${walletId} not found`);
+      throw new WalletNotFoundException(walletId);
     }
 
     return rows[0];

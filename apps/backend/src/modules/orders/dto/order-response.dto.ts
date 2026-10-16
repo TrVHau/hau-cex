@@ -1,4 +1,4 @@
-import { OrderType } from '../../../common/enums/order-type.enum';
+import { OrderType, PaginatedResponseDto } from '../../../common';
 import { OrderSide } from '../../../generated/prisma';
 
 export type OrderResponseDto = {
@@ -17,7 +17,4 @@ export type OrderResponseDto = {
   updatedAt: string;
 };
 
-export type OrderListResponseDto = {
-  items: OrderResponseDto[];
-  nextCursor: string | null;
-};
+export type OrderListResponseDto = PaginatedResponseDto<OrderResponseDto>;

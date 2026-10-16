@@ -38,11 +38,17 @@ func New(redisClient *redis.Client, pub *publisher.Publisher) *Customer {
 // Run consumes engine commands from Redis Streams, dispatches to PairEngine,
 // publishes events, then ACKs. Blocks until ctx is cancelled.
 func (c *Customer) Run(ctx context.Context) error {
-	err := c.redis.XGroupCreateMkStream(ctx, EngineCommandsStream, CommandGroup, "$").Err()
+	err := c.redis.XGroupCreateMkStream(ctx, EngineCommandsStream, CommandGroup, "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return fmt.Errorf("create consumer group: %w", err)
 	}
 
+	// Phase 1: recover pending (PEL) messages from previous run before reading new ones
+	if err := c.drainPending(ctx); err != nil {
+		return err
+	}
+
+	// Phase 2: consume new messages
 	for {
 		result, err := c.redis.XReadGroup(
 			ctx,
@@ -77,6 +83,46 @@ func (c *Customer) Run(ctx context.Context) error {
 		}
 	}
 }
+
+// drainPending reprocesses any messages that are in the PEL (pending entry list)
+// from a previous consumer run. Reads with ID "0" until no more pending msgs.
+func (c *Customer) drainPending(ctx context.Context) error {
+	for {
+		result, err := c.redis.XReadGroup(
+			ctx,
+			&redis.XReadGroupArgs{
+				Group:    CommandGroup,
+				Consumer: CustomerName,
+				Streams:  []string{EngineCommandsStream, "0"},
+				Count:    10,
+				Block:    0, // non-blocking
+			},
+		).Result()
+
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			if errors.Is(err, redis.Nil) {
+				return nil // no pending messages
+			}
+			return fmt.Errorf("drain pending: %w", err)
+		}
+
+		if len(result) == 0 || len(result[0].Messages) == 0 {
+			return nil // drained
+		}
+
+		for _, stream := range result {
+			for _, msg := range stream.Messages {
+				if err := c.dispatch(ctx, msg); err != nil {
+					log.Printf("failed to process pending msg %s: %v", msg.ID, err)
+				}
+			}
+		}
+	}
+}
+
 
 func (c *Customer) dispatch(
 	ctx context.Context,

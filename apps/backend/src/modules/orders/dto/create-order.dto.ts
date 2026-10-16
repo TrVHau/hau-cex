@@ -1,6 +1,6 @@
 import { IsString, IsNotEmpty, IsEnum, Matches } from 'class-validator';
 import { OrderSide } from '../../../generated/prisma';
-import { OrderType } from '../../../common/enums/order-type.enum'; // Import Enum
+import { OrderType } from '../../../common';
 
 export class CreateOrderDto {
   @IsString()

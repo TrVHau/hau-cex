@@ -219,17 +219,21 @@ func envelope(e *PairEngine, messageType string, cmdSeq uint64, payload any) mes
 
 // bookLevels converts a SideBook into the [][3]string wire format.
 func bookLevels(book orderbook.SideBook) [][3]string {
-	levels := make([][3]string, 0, len(book.Levels()))
-	for price, level := range book.Levels() {
-		levels = append(levels, [3]string{
-			price,
+	rawLevels := make([]*orderbook.PriceLevel, 0, len(book.Levels()))
+	for _, level := range book.Levels() {
+		rawLevels = append(rawLevels, level)
+	}
+	sort.Slice(rawLevels, func(i, j int) bool {
+		return rawLevels[i].Price.Cmp(rawLevels[j].Price) < 0
+	})
+
+	levels := make([][3]string, len(rawLevels))
+	for i, level := range rawLevels {
+		levels[i] = [3]string{
+			level.Price.String(),
 			level.TotalQuantity.String(),
 			strconv.Itoa(level.Count()),
-		})
+		}
 	}
-	// Sort by price string (fixed-point strings with same decimal places sort lexicographically correctly)
-	sort.Slice(levels, func(i, j int) bool {
-		return levels[i][0] < levels[j][0]
-	})
 	return levels
 }

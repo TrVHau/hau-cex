@@ -1,27 +1,9 @@
-import { Type } from 'class-transformer';
-import {
-  IsInt,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { CursorPaginationQueryDto } from '../../../common';
 
-export class OrderListQueryDto {
+export class OrderListQueryDto extends CursorPaginationQueryDto {
   @IsString()
   @IsOptional()
   @IsNotEmpty()
   symbol?: string;
-
-  @Type(() => Number)
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit?: number = 20;
-
-  @IsString()
-  @IsOptional()
-  cursor?: string;
 }

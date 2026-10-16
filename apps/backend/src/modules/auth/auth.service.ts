@@ -8,36 +8,20 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { UserRole, UserStatus } from '../../generated/prisma';
+import { UserStatus } from '../../generated/prisma';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { AuthenticatedUser } from '../../common/types/authenticated-user.type';
-import { JwtRefreshPayload } from './types/jwt-payload.type';
+import { type AuthenticatedUser } from '../../common';
+import {
+  JwtRefreshPayload,
+  UserInfo,
+  GeneratedTokens,
+  TokensResponse,
+} from './types';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import ms, { type StringValue } from 'ms';
 import { v7 as uuidv7 } from 'uuid';
-
-type UserInfo = {
-  id: string;
-  email: string;
-  role: UserRole;
-  fullName: string | null;
-};
-
-type GeneratedTokens = {
-  accessToken: string;
-  refreshToken: string;
-  refreshTokenHash: string;
-  sessionId: string;
-  expiresAt: Date;
-};
-
-type TokensResponse = {
-  accessToken: string;
-  refreshToken: string;
-  user: UserInfo;
-};
 
 @Injectable()
 export class AuthService {
