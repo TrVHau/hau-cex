@@ -15,6 +15,7 @@ import {
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { Decimal } from 'decimal.js';
+import Redis from 'ioredis';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
@@ -127,27 +128,46 @@ async function main() {
   await prisma.$executeRawUnsafe(`
     CREATE SEQUENCE IF NOT EXISTS order_seq_${safeId} START 1;
     CREATE SEQUENCE IF NOT EXISTS cmd_seq_${safeId} START 1;
+    ALTER SEQUENCE order_seq_${safeId} RESTART WITH 1;
+    ALTER SEQUENCE cmd_seq_${safeId} RESTART WITH 1;
   `);
   console.log(
-    `Created sequences for trading pair ${pair.symbol}: order_seq_${safeId}, cmd_seq_${safeId}`,
+    `Reset sequences for trading pair ${pair.symbol}: order_seq_${safeId}, cmd_seq_${safeId}`,
   );
 
   await prisma.orderSequence.upsert({
     where: { tradingPairId: pair.id },
-    update: {},
+    update: { lastValue: 0 },
     create: { tradingPairId: pair.id, lastValue: 0 },
   });
 
   await prisma.engineCommandSequence.upsert({
     where: { tradingPairId: pair.id },
-    update: {},
+    update: { lastValue: 0 },
     create: { tradingPairId: pair.id, lastValue: 0 },
   });
 
-  // Xoa ledger entries cu de seed lai sach
+  // Xoa trades, orders, outbox_events, processed_events, ledger_entries cu de seed lai sach
+  await prisma.trade.deleteMany({});
+  await prisma.order.deleteMany({});
+  await prisma.outboxEvent.deleteMany({});
+  await prisma.processedEvent.deleteMany({});
   await prisma.ledgerEntry.deleteMany({
     where: { userId: { in: [treasury.id, alice.id, bob.id] } },
   });
+
+  try {
+    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+    await redis.del(
+      'stream:engine:commands',
+      'stream:engine:events',
+      'stream:market:events',
+      'cache:orderbook:BTC_USDT',
+    );
+    await redis.quit();
+  } catch (err) {
+    console.warn('Redis cleanup failed:', err);
+  }
 
   await prisma.$transaction(async (tx) => {
     // --- Treasury USDT ---

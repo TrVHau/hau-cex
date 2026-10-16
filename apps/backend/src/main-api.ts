@@ -5,6 +5,7 @@ import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+  app.enableCors({ origin: '*' });
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(
     new ValidationPipe({
@@ -14,7 +15,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
   app.useGlobalInterceptors(new ResponseInterceptor());
-  const port: number = Number(process.env.PORT ?? 3000);
+  const port: number = Number(process.env.PORT ?? process.env.API_PORT ?? 3000);
 
   await app.listen(port);
   console.log(`Application is running on: ${await app.getUrl()}`);

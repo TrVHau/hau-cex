@@ -40,11 +40,13 @@ type InFlightBatch struct {
 }
 
 func (e *PairEngine) HandleOpenMarket(cmd message.OpenMarketCommand, cmdSeq uint64) []message.EventEnvelope {
-	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
-		return nil
-	} else if errors.Is(err, ErrSequenceGap) {
-		e.State = StateFailed
-		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", "Expected command sequence gap")}
+	if e.LastProcessedCmdSeq > 0 {
+		if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
+			return nil
+		} else if errors.Is(err, ErrSequenceGap) {
+			e.State = StateFailed
+			return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", "Expected command sequence gap")}
+		}
 	}
 
 	if e.Book == nil {

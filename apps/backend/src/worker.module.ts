@@ -11,15 +11,16 @@ import { EngineEventsModule } from './modules/engine-events/engine-events.module
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: resolve(process.cwd(), '../../.env'),
+      envFilePath: [
+        resolve(process.cwd(), '.env'),
+        resolve(process.cwd(), '../.env'),
+        resolve(process.cwd(), '../../.env'),
+      ],
     }),
     PrismaModule,
     RedisModule,
     EngineEventsModule,
   ],
-  providers: [
-    OutboxPollerService,
-    OpenMarketBootstrapService,
-  ],
+  providers: [OutboxPollerService, OpenMarketBootstrapService],
 })
 export class WorkerModule {}

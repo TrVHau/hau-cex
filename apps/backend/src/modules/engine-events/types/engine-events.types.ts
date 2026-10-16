@@ -35,3 +35,12 @@ export interface CancelOrderRejectedPayload {
   reason: string;
   rejectedAt: string;
 }
+
+export interface OrderBookChangedPayload {
+  tradingPairId: string;
+  market: string;
+  bookSequence: string;
+  bids: [string, string, string][];
+  asks: [string, string, string][];
+  changedAt: string;
+}

@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
-import { TradeCreatedPayload } from './types/engine-events.types';
-import { PrismaTx } from '../../common/types/prisma-tx.type';
-import { ReferenceType } from '../../common/enums/reference-type.enum';
+import { TradeCreatedPayload } from './types';
+import { PrismaTx, ReferenceType } from '../../common';
 import { LedgerEntryType } from '../../generated/prisma';
 import { v7 as uuidv7 } from 'uuid';
 

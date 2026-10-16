@@ -1,11 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
-import {
-  OrderCancelledPayload,
-  CancelOrderRejectedPayload,
-} from './types/engine-events.types';
-import { PrismaTx } from '../../common/types/prisma-tx.type';
-import { ReferenceType } from '../../common/enums/reference-type.enum';
+import { OrderCancelledPayload, CancelOrderRejectedPayload } from './types';
+import { PrismaTx, ReferenceType } from '../../common';
 import { v7 as uuidv7 } from 'uuid';
 
 @Injectable()

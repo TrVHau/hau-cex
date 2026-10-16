@@ -4,20 +4,28 @@ import { AppService } from './app.service';
 import { ConfigModule } from '@nestjs/config';
 import { resolve } from 'node:path';
 import { PrismaModule } from './core/prisma/prisma.module';
+import { RedisModule } from './core/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { WalletsModule } from './modules/wallets/wallets.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { MarketModule } from './modules/market/market.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: resolve(process.cwd(), '../../.env'),
+      envFilePath: [
+        resolve(process.cwd(), '.env'),
+        resolve(process.cwd(), '../.env'),
+        resolve(process.cwd(), '../../.env'),
+      ],
     }),
     PrismaModule,
+    RedisModule,
     AuthModule,
     WalletsModule,
     OrdersModule,
+    MarketModule,
   ],
   controllers: [AppController],
   providers: [AppService],

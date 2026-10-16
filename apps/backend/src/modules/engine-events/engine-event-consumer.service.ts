@@ -13,10 +13,15 @@ import {
   TradeCreatedPayload,
   OrderCancelledPayload,
   CancelOrderRejectedPayload,
-} from './types/engine-events.types';
+} from './types';
+import {
+  ENGINE_EVENTS_STREAM,
+  MARKET_EVENTS_STREAM,
+  ENGINE_EVENTS_CONSUMER_GROUP,
+  ORDERBOOK_CACHE_PREFIX,
+} from '../../common';
 
-const ENGINE_EVENTS_STREAM = 'stream:engine:events';
-const CONSUMER_GROUP = 'backend-engine-events-v1';
+const CONSUMER_GROUP = ENGINE_EVENTS_CONSUMER_GROUP;
 const CONSUMER_NAME = 'backend-1';
 
 @Injectable()
@@ -89,7 +94,12 @@ export class EngineEventConsumerService
         '0',
       )) as [string, [string, string[]][]][] | null;
 
-      if (!result || result.length === 0 || !result[0][1] || result[0][1].length === 0) {
+      if (
+        !result ||
+        result.length === 0 ||
+        !result[0][1] ||
+        result[0][1].length === 0
+      ) {
         break;
       }
 
@@ -181,7 +191,89 @@ export class EngineEventConsumerService
       });
     });
 
+    // Post-commit: Cache orderbook and publish to stream:market:events for WebSocket fanout
+    const tradingPairId =
+      (payload.tradingPairId as string | undefined) || fields.partitionKey;
+    await this.postProcessMarketEvent(messageType, tradingPairId, payload);
+
     await this.ack(msgId);
+  }
+
+  private async postProcessMarketEvent(
+    messageType: string,
+    tradingPairId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const market = typeof payload.market === 'string' ? payload.market : '';
+      if (messageType === 'OrderBookChanged') {
+        const bookSequence =
+          typeof payload.bookSequence === 'string'
+            ? payload.bookSequence
+            : typeof payload.bookSequence === 'number'
+              ? String(payload.bookSequence)
+              : '0';
+        const orderbookData = {
+          symbol: market,
+          tradingPairId,
+          bookSequence,
+          bids: payload.bids ?? [],
+          asks: payload.asks ?? [],
+          changedAt: payload.changedAt ?? new Date().toISOString(),
+        };
+
+        const jsonStr = JSON.stringify(orderbookData);
+        await this.redis.set(
+          `${ORDERBOOK_CACHE_PREFIX}${tradingPairId}`,
+          jsonStr,
+        );
+        if (market) {
+          await this.redis.set(
+            `${ORDERBOOK_CACHE_PREFIX}${market.toUpperCase()}`,
+            jsonStr,
+          );
+        }
+
+        await this.redis.xadd(
+          MARKET_EVENTS_STREAM,
+          '*',
+          'messageType',
+          'orderbook.update',
+          'market',
+          market.toUpperCase(),
+          'tradingPairId',
+          tradingPairId,
+          'payload',
+          jsonStr,
+        );
+      } else if (messageType === 'TradeCreated') {
+        const tradeData = {
+          symbol: market,
+          tradeId: payload.tradeId,
+          engineMatchId: payload.engineMatchId,
+          price: payload.executionPrice,
+          quantity: payload.executedQuantity,
+          takerSide: payload.takerSide,
+          matchedAt: payload.matchedAt,
+        };
+
+        const jsonStr = JSON.stringify(tradeData);
+        await this.redis.xadd(
+          MARKET_EVENTS_STREAM,
+          '*',
+          'messageType',
+          'trade.created',
+          'market',
+          market.toUpperCase(),
+          'tradingPairId',
+          tradingPairId,
+          'payload',
+          jsonStr,
+        );
+      }
+    } catch (error) {
+      this.logger.error('Failed to post-process market event', error);
+    }
   }
 
   private async dispatch(
@@ -249,7 +341,7 @@ export class EngineEventConsumerService
         break;
 
       case 'OrderBookChanged':
-        // Phase 7B — will broadcast via WebSocket
+        // Handled in postProcessMarketEvent after transaction commit
         break;
 
       default:

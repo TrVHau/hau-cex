@@ -1,7 +1,9 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { nextCommandSequence } from '../../common/helpers/sequence.helper';
+import { Prisma } from '../../generated/prisma';
+import { nextCommandSequence, ENGINE_COMMANDS_STREAM } from '../../common';
 import { v7 as uuidv7 } from 'uuid';
+import { OpenMarketPayload } from './types';
 
 @Injectable()
 export class OpenMarketBootstrapService implements OnApplicationBootstrap {
@@ -27,7 +29,7 @@ export class OpenMarketBootstrapService implements OnApplicationBootstrap {
             where: {
               messageType: 'OpenMarket',
               partitionKey: pair.id,
-              status: { in: ['PENDING', 'PUBLISHED'] },
+              status: 'PENDING',
             },
             select: { id: true },
           });
@@ -41,29 +43,31 @@ export class OpenMarketBootstrapService implements OnApplicationBootstrap {
 
           const cmdSeq = await nextCommandSequence(tx, pair.id);
 
+          const payload: OpenMarketPayload = {
+            tradingPairId: pair.id,
+            market: pair.symbol,
+            baseAssetId: pair.baseAssetId,
+            quoteAssetId: pair.quoteAssetId,
+            pricePrecision: pair.pricePrecision,
+            quantityPrecision: pair.quantityPrecision,
+            tickSize: pair.tickSize.toFixed(18),
+            stepSize: pair.stepSize.toFixed(18),
+            minQuantity: pair.minQuantity.toFixed(18),
+            minNotional: pair.minNotional.toFixed(18),
+            openedAt: new Date().toISOString(),
+          };
+
           await tx.outboxEvent.create({
             data: {
               messageId: uuidv7(),
               version: 1,
               correlationId: uuidv7(),
-              streamName: 'stream:engine:commands',
+              streamName: ENGINE_COMMANDS_STREAM,
               messageType: 'OpenMarket',
               partitionKey: pair.id,
               commandSequence: cmdSeq,
               occurredAt: new Date(),
-              payload: {
-                tradingPairId: pair.id,
-                market: pair.symbol,
-                baseAssetId: pair.baseAssetId,
-                quoteAssetId: pair.quoteAssetId,
-                pricePrecision: pair.pricePrecision,
-                quantityPrecision: pair.quantityPrecision,
-                tickSize: pair.tickSize.toFixed(18),
-                stepSize: pair.stepSize.toFixed(18),
-                minQuantity: pair.minQuantity.toFixed(18),
-                minNotional: pair.minNotional.toFixed(18),
-                openedAt: new Date().toISOString(),
-              },
+              payload: payload as unknown as Prisma.InputJsonValue,
             },
           });
 

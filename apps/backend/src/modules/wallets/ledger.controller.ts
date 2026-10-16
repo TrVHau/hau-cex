@@ -1,10 +1,9 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { WalletsService } from './wallets.service';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '../../common';
 import { LedgerPageDto } from './dto/ledger-page.dto';
 import { LedgerQueryDto } from './dto/ledger-query.dto';
-import type { AuthenticatedUser } from '../../common/types/authenticated-user.type';
 
 @Controller('ledger')
 @UseGuards(JwtAuthGuard)

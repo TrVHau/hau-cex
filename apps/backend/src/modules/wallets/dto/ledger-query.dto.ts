@@ -1,18 +1,20 @@
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { Type } from 'class-transformer';
-export class LedgerQueryDto {
+import { IsOptional, IsString } from 'class-validator';
+import { CursorPaginationQueryDto } from '../../../common';
+
+export class LedgerQueryDto extends CursorPaginationQueryDto {
   @IsString()
   @IsOptional()
   asset?: string;
 
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
+  @IsString()
   @IsOptional()
-  limit?: number = 20;
+  assetSymbol?: string;
 
   @IsString()
   @IsOptional()
-  cursor?: string;
+  entryType?: string;
+
+  @IsString()
+  @IsOptional()
+  balanceType?: string;
 }
