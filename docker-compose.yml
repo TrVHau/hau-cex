@@ -46,12 +46,68 @@ services:
     build:
       context: ./services/matching-engine
       dockerfile: Dockerfile
+    container_name: hau-cex-engine
+    restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379
     depends_on:
       redis:
         condition: service_healthy
+
+  backend-api:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    container_name: hau-cex-api
     restart: unless-stopped
+    entrypoint: ["/app/apps/backend/entrypoint.api.sh"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      API_PORT: ${API_PORT:-3000}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      BCRYPT_SALT_ROUNDS: ${BCRYPT_SALT_ROUNDS:-10}
+      TREASURY_USER_ID: ${TREASURY_USER_ID}
+      ENGINE_COMMAND_STREAM: ${ENGINE_COMMAND_STREAM:-stream:engine:commands}
+      ENGINE_EVENT_STREAM: ${ENGINE_EVENT_STREAM:-stream:engine:events}
+      MARKET_EVENT_STREAM: ${MARKET_EVENT_STREAM:-stream:market:events}
+      DEAD_LETTER_STREAM: ${DEAD_LETTER_STREAM:-stream:dead-letter}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  backend-worker:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    container_name: hau-cex-worker
+    restart: unless-stopped
+    entrypoint: ["/app/apps/backend/entrypoint.worker.sh"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      BCRYPT_SALT_ROUNDS: ${BCRYPT_SALT_ROUNDS:-10}
+      TREASURY_USER_ID: ${TREASURY_USER_ID}
+      ENGINE_COMMAND_STREAM: ${ENGINE_COMMAND_STREAM:-stream:engine:commands}
+      ENGINE_EVENT_STREAM: ${ENGINE_EVENT_STREAM:-stream:engine:events}
+      MARKET_EVENT_STREAM: ${MARKET_EVENT_STREAM:-stream:market:events}
+      DEAD_LETTER_STREAM: ${DEAD_LETTER_STREAM:-stream:dead-letter}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres-data:

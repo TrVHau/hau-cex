@@ -1,0 +1,39 @@
+# Version control
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Dependencies (will be installed fresh in container)
+**/node_modules
+
+# Build output (rebuilt in container)
+**/dist
+apps/web/.next
+apps/web/build
+
+# Dev-only services
+services/matching-engine
+
+# Contracts (not needed for backend)
+contracts
+
+# Docs & scratch
+docs
+scratch
+
+# Test files
+**/test
+**/*.spec.ts
+**/*.e2e-spec.ts
+
+# IDE
+.vscode
+.idea
+**/.DS_Store
+
+# Logs
+**/*.log
