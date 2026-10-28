@@ -11,3 +11,10 @@ export interface OpenMarketPayload {
   minNotional: string;
   openedAt: string;
 }
+
+export interface SuspendMarketPayload {
+  tradingPairId: string;
+  market: string;
+  reason: string;
+  suspendedAt: string;
+}

@@ -123,7 +123,6 @@ func (c *Customer) drainPending(ctx context.Context) error {
 	}
 }
 
-
 func (c *Customer) dispatch(
 	ctx context.Context,
 	msg redis.XMessage,
@@ -193,7 +192,12 @@ func (c *Customer) dispatch(
 			return fmt.Errorf("unmarshal CancelOrder: %w", err)
 		}
 		events = engine.HandleCancelOrder(command, commandSeq)
-
+	case "SuspendMarket":
+		var command message.SuspendMarketCommand
+		if err := json.Unmarshal([]byte(payload), &command); err != nil {
+			return fmt.Errorf("unmarshal SuspendMarket: %w", err)
+		}
+		events = engine.HandleSuspendMarket(command, commandSeq)
 	default:
 		return fmt.Errorf("unknown message type: %s", messageType)
 	}

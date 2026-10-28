@@ -113,7 +113,7 @@ func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq ui
 		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
 	}
 
-	if e.State != StateReady {
+	if e.State != StateReady && e.State != StateSuspended {
 		return []message.EventEnvelope{buildCancelOrderRejected(e, cmd, cmdSeq, "MARKET_NOT_READY")}
 	}
 
@@ -136,13 +136,27 @@ func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq ui
 	return events
 }
 
+func (e *PairEngine) HandleSuspendMarket(cmd message.SuspendMarketCommand, cmdSeq uint64) []message.EventEnvelope {
+	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
+		return nil
+	} else if errors.Is(err, ErrSequenceGap) {
+		e.State = StateFailed
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
+	}
+
+	e.State = StateSuspended
+	e.LastProcessedCmdSeq = cmdSeq
+	events := []message.EventEnvelope{buildMarketSuspended(e, cmdSeq, cmd.Reason)}
+	e.storeInFlight(cmdSeq, events)
+	return events
+}
+
 func (e *PairEngine) storeInFlight(cmdSeq uint64, events []message.EventEnvelope) {
 	e.InFlight = &InFlightBatch{
 		CommandSequence: cmdSeq,
 		Events:          events,
 	}
 }
-
 
 // validateSeq returns nil if cmdSeq is next expected, ErrDuplicateCommand if already
 // processed, ErrSequenceGap if a gap is detected.

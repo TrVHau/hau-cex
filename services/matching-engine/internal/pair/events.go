@@ -90,6 +90,13 @@ type CancelOrderRejectedPayload struct {
 	RejectedAt    time.Time `json:"rejectedAt"`
 }
 
+type MarketSuspendedPayload struct {
+	TradingPairID string    `json:"tradingPairId"`
+	Market        string    `json:"market"`
+	Reason        string    `json:"reason"`
+	SuspendedAt   time.Time `json:"suspendedAt"`
+}
+
 // ─── Builder functions ───────────────────────────────────────────────────────
 
 func buildMarketOpened(e *PairEngine, cmdSeq uint64) message.EventEnvelope {
@@ -199,6 +206,15 @@ func buildOrderCancelled(e *PairEngine, cmd message.CancelOrderCommand, cmdSeq u
 		OrderID:           cmd.OrderID,
 		CancelledQuantity: remainingQuantity.String(),
 		CancelledAt:       time.Now().UTC(),
+	})
+}
+
+func buildMarketSuspended(e *PairEngine, cmdSeq uint64, reason string) message.EventEnvelope {
+	return envelope(e, "MarketSuspended", cmdSeq, MarketSuspendedPayload{
+		TradingPairID: e.PairID,
+		Market:        e.Market,
+		Reason:        reason,
+		SuspendedAt:   time.Now().UTC(),
 	})
 }
 

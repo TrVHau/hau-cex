@@ -1,341 +1,704 @@
-# Phase 7 — Trade Settlement & Market Data
+# Phase 10 — Admin API — Implementation Plan
 
-> **Mục tiêu**: Hoàn thiện vòng đời lệnh (order lifecycle) và cung cấp market data real-time cho frontend.
+> **Mục tiêu**: Có đủ thao tác vận hành demo — quản lý user, asset, market.
 >
-> Đây là phase quan trọng nhất — toàn bộ flow end-to-end sẽ hoạt động sau phase này:
-> `Đặt lệnh → Engine matching → Trade/Cancel event → Settlement → Wallet cập nhật → WebSocket push`
+> **Thời gian ước tính**: 3–5 ngày
+>
+> **Tham chiếu**: `docs/08-api-design.md` §9, `docs/13-implementation-roadmap.md` Phase 10
 
 ---
 
-## Tổng quan trạng thái hiện tại
+## User Review Required
 
-| Module                                                           | Trạng thái                  |
-| ---------------------------------------------------------------- | --------------------------- |
-| Smart Contracts                                                  | ✅ 44/44 tests pass         |
-| Auth API                                                         | ✅ Done                     |
-| Wallets API                                                      | ✅ Done                     |
-| Orders API (place/cancel/query)                                  | ✅ Done                     |
-| Go Matching Engine                                               | ✅ Builds clean, bugs fixed |
-| Outbox Poller (publish commands → Redis)                         | ✅ Done                     |
-| Engine Event Consumer (MarketOpened, OrderOpened, OrderRejected) | ✅ Done                     |
-| **TradeCreated settlement**                                      | ❌ Stub — "Phase 7" comment |
-| **OrderCancelled unlock**                                        | ❌ Stub                     |
-| **CancelOrderRejected**                                          | ❌ Stub                     |
-| **OrderFilled / PARTIALLY_FILLED status**                        | ❌ Missing                  |
-| **WebSocket / Market data**                                      | ❌ Not started              |
-| **Public market data API**                                       | ❌ Not started              |
+> [!IMPORTANT]
+> **Go Engine cần sửa**: Go matching engine **chưa handle `SuspendMarket` command** (dispatch chỉ có `OpenMarket`, `PlaceOrder`, `CancelOrder`). Cần thêm `HandleSuspendMarket` vào Go engine để engine ngừng nhận lệnh khi market bị suspend.
+
+> [!WARNING]
+> **Quyết định thiết kế — `MarketSuspended` event**: Theo business rules, khi admin suspend market, backend đã set DB = `SUSPENDED` ngay lập tức (block `PlaceOrder` ở API level). Engine chỉ cần set internal state = `SUSPENDED` để reject bất kỳ in-flight command nào. **Không cần emit `MarketSuspended` event ngược lại** (khác với `OpenMarket` → `MarketOpened`).
+
+## Open Questions
+
+> [!IMPORTANT]
+> **Lock user**: Khi lock user, có cần **revoke tất cả sessions** (force logout) không? Hiện tại auth service chỉ check `UserStatus.LOCKED` khi login/refresh, nhưng access token vẫn valid đến khi expire. Plan hiện tại: **revoke all sessions** khi lock.
 
 ---
 
-## Phase 7A — Trade Settlement (Backend Critical Path)
+## Kiến Trúc Tổng Quan
 
-### 7A-1: Implement `TradeCreated` handler
+### Endpoints (9 routes)
 
-**File**: `src/modules/engine-events/engine-event-consumer.service.ts`
+| Method | Path                                | Mô tả                                |
+| ------ | ----------------------------------- | ------------------------------------ |
+| `GET`  | `/admin/users`                      | List users (pagination)              |
+| `POST` | `/admin/users/:userId/lock`         | Lock user + revoke sessions          |
+| `POST` | `/admin/users/:userId/unlock`       | Unlock user                          |
+| `GET`  | `/admin/assets`                     | List assets                          |
+| `POST` | `/admin/assets/:assetId/activate`   | Activate asset                       |
+| `POST` | `/admin/assets/:assetId/deactivate` | Deactivate asset                     |
+| `GET`  | `/admin/markets`                    | List markets + status                |
+| `POST` | `/admin/markets/:marketId/open`     | Trigger OpenMarket → Outbox → Engine |
+| `POST` | `/admin/markets/:marketId/suspend`  | Set SUSPENDED + Outbox SuspendMarket |
 
-Khi nhận event `TradeCreated`, cần thực hiện trong 1 transaction:
+### Module Structure
 
 ```
-1. Idempotency check (processedEvent) — đã có ✅
-2. Tạo Trade record với engineMatchId (UNIQUE — idempotency tự nhiên)
-3. Update Buy Order: filledQuantity += executedQuantity, remainingQuantity -= executedQuantity
-   → status = FILLED nếu remainingQuantity == 0, else PARTIALLY_FILLED
-4. Update Sell Order: tương tự
-5. Debit buyer's locked QUOTE wallet (executedQuantity * executionPrice)
-   + Credit buyer's BASE wallet (executedQuantity - buyerFee)
-   + Credit treasury BASE wallet (buyerFee)
-6. Debit seller's BASE wallet (executedQuantity) — từ available (seller đã không lock base)
-   + Credit seller's QUOTE wallet (executedQuantity * executionPrice - sellerFee)
-   + Credit treasury QUOTE wallet (sellerFee)
-7. Tạo LedgerEntry cho mỗi debit/credit (TRADE_SETTLEMENT type)
+src/modules/admin/
+├── admin.module.ts                  [NEW]
+├── admin-users.controller.ts        [NEW]
+├── admin-assets.controller.ts       [NEW]
+├── admin-markets.controller.ts      [NEW]
+├── admin.service.ts                 [NEW]
+└── dto/
+    └── lock-user.dto.ts             [NEW]
+
+src/modules/engine/types/            [MODIFY — thêm SuspendMarketPayload vào đây]
+├── open-market.types.ts             — đã có OpenMarketPayload, thêm SuspendMarketPayload
+└── index.ts                         — re-export thêm
 ```
 
-**Lấy feeRate**: Fetch `tradingPair.makerFeeRate` / `takerFeeRate` từ DB.
+> **Không tạo `admin/types/`** — Admin module không có internal types riêng. `SuspendMarketPayload` là engine command contract, đặt cùng `OpenMarketPayload` ở `engine/types/`.
 
-- `takerSide` trong payload xác định ai là taker (fee cao hơn).
-- Maker = resting order, Taker = incoming order.
-- `buyerFee` tính bằng **Base** asset.
-- `sellerFee` tính bằng **Quote** asset.
+---
 
-**engineMatchId format**: `{tradingPairId}:{commandSequence}:{matchIndex}` (unique key)
+## Market Flows
 
-**Payload TradeCreated** (từ Go engine):
+### Open Market Flow
 
-```ts
-interface TradeCreatedPayload {
-  tradeId: string; // UUID (informational)
-  engineMatchId: string; // "{pairId}:{cmdSeq}:{matchIndex}" — DB unique key
-  tradingPairId: string;
-  market: string;
-  tradeSequence: string;
-  matchIndex: number;
-  buyOrderId: string;
-  sellOrderId: string;
-  makerOrderId: string;
-  takerOrderId: string;
-  takerSide: "BUY" | "SELL";
-  executionPrice: string;
-  executedQuantity: string;
-  buyOrderRemainingQuantity: string;
-  sellOrderRemainingQuantity: string;
-  matchedAt: string;
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant API as Backend API
+    participant DB as PostgreSQL
+    participant Outbox as Outbox Poller
+    participant Redis as Redis Stream
+    participant Engine as Go Engine
+    participant Consumer as Event Consumer
+
+    Admin->>API: POST /admin/markets/:id/open
+    API->>DB: Check pair.status == SUSPENDED
+    Note over DB: Keep status = SUSPENDED
+    API->>DB: Create OutboxEvent(OpenMarket)
+    API-->>Admin: 200 { status: "OPENING" }
+
+    Outbox->>Redis: XADD stream:engine:commands
+    Redis->>Engine: SuspendMarket command
+    Engine->>Engine: state = READY
+    Engine->>Redis: XADD stream:engine:events (MarketOpened)
+    Redis->>Consumer: MarketOpened event
+    Consumer->>DB: UPDATE trading_pairs SET status = 'READY'
+```
+
+### Suspend Market Flow
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant API as Backend API
+    participant DB as PostgreSQL
+    participant Outbox as Outbox Poller
+    participant Redis as Redis Stream
+    participant Engine as Go Engine
+
+    Admin->>API: POST /admin/markets/:id/suspend
+    API->>DB: BEGIN TRANSACTION
+    API->>DB: UPDATE trading_pairs SET status = 'SUSPENDED'
+    API->>DB: INSERT OutboxEvent(SuspendMarket)
+    API->>DB: COMMIT
+    API-->>Admin: 200 { status: "SUSPENDED" }
+
+    Note over API: PlaceOrder bị block ngay<br/>(DB check status ≠ READY)
+
+    Outbox->>Redis: XADD stream:engine:commands
+    Redis->>Engine: SuspendMarket command
+    Engine->>Engine: state = SUSPENDED
+    Note over Engine: Reject any in-flight<br/>PlaceOrder commands
+```
+
+---
+
+## Proposed Changes
+
+### Go Matching Engine (3 files)
+
+---
+
+#### [MODIFY] `services/matching-engine/internal/pair/engine.go`
+
+Thêm `HandleSuspendMarket` method:
+
+```go
+func (e *PairEngine) HandleSuspendMarket(cmd message.SuspendMarketCommand, cmdSeq uint64) []message.EventEnvelope {
+	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
+		return nil
+	} else if errors.Is(err, ErrSequenceGap) {
+		e.State = StateFailed
+		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
+	}
+
+	e.State = StateSuspended
+	e.LastProcessedCmdSeq = cmdSeq
+
+	events := []message.EventEnvelope{buildMarketSuspended(e, cmdSeq, cmd.Reason)}
+	e.storeInFlight(cmdSeq, events)
+	return events
 }
 ```
 
-**Cần tạo**: `src/modules/engine-events/trade-settlement.service.ts`
+> **Lưu ý**: Khi engine ở trạng thái `SUSPENDED`, `HandlePlaceOrder` sẽ tự động reject (`e.State != StateReady → OrderRejected`). Cancel vẫn cho phép vì `HandleCancelOrder` chỉ check `READY` — **cần sửa thêm**: cho phép cancel khi `SUSPENDED` theo business rule.
 
-- Tách logic settlement ra service riêng, inject vào `EngineEventConsumerService`
-- Dùng `WalletBalanceService` đã có: `debitLocked`, `creditAvailable`, `debitAvailable`
+Sửa `HandleCancelOrder` — cho phép cancel khi SUSPENDED:
+
+```diff
+ func (e *PairEngine) HandleCancelOrder(cmd message.CancelOrderCommand, cmdSeq uint64) []message.EventEnvelope {
+ 	if err := e.validateSeq(cmdSeq); errors.Is(err, ErrDuplicateCommand) {
+ 		return nil
+ 	} else if errors.Is(err, ErrSequenceGap) {
+ 		e.State = StateFailed
+ 		return []message.EventEnvelope{buildEngineFailed(e, cmdSeq, "COMMAND_SEQUENCE_GAP", fmt.Sprintf("Expected %d got %d", e.LastProcessedCmdSeq+1, cmdSeq))}
+ 	}
+
+-	if e.State != StateReady {
++	if e.State != StateReady && e.State != StateSuspended {
+ 		return []message.EventEnvelope{buildCancelOrderRejected(e, cmd, cmdSeq, "MARKET_NOT_READY")}
+ 	}
+```
 
 ---
 
-### 7A-2: Implement `OrderCancelled` handler
+#### [MODIFY] `services/matching-engine/internal/pair/events.go`
 
-Khi nhận `OrderCancelled`:
+Thêm `MarketSuspendedPayload` và `buildMarketSuspended`:
 
-1. Update order status: `CANCEL_PENDING → CANCELLED`
-2. Unlock remaining locked amount về available:
-   - Nếu BUY: unlock `remainingLockedAmount` của QUOTE wallet
-   - Nếu SELL: unlock `remainingLockedAmount` của BASE wallet
-3. Update `order.remainingLockedAmount = 0`
-4. Tạo LedgerEntry type `ORDER_UNLOCK`
+```go
+type MarketSuspendedPayload struct {
+	TradingPairID string    `json:"tradingPairId"`
+	Market        string    `json:"market"`
+	Reason        string    `json:"reason"`
+	SuspendedAt   time.Time `json:"suspendedAt"`
+}
 
-**Payload**:
-
-```ts
-interface OrderCancelledPayload {
-  orderId: string;
-  cancelledQuantity: string;
-  tradingPairId: string;
-  market: string;
-  cancelledAt: string;
+func buildMarketSuspended(e *PairEngine, cmdSeq uint64, reason string) message.EventEnvelope {
+	return envelope(e, "MarketSuspended", cmdSeq, MarketSuspendedPayload{
+		TradingPairID: e.PairID,
+		Market:        e.Market,
+		Reason:        reason,
+		SuspendedAt:   time.Now().UTC(),
+	})
 }
 ```
 
 ---
 
-### 7A-3: Implement `CancelOrderRejected` handler
+#### [MODIFY] `services/matching-engine/internal/transport/redis_customer.go`
 
-Khi nhận `CancelOrderRejected`:
+Thêm `SuspendMarket` case trong dispatch:
 
-1. Update order status: `CANCEL_PENDING → OPEN` (hoặc `PARTIALLY_FILLED`)
-   - Cần check `filledQuantity > 0` để quyết định trả về OPEN hay PARTIALLY_FILLED
+```diff
+ 	case "CancelOrder":
+ 		var command message.CancelOrderCommand
+ 		if err := json.Unmarshal([]byte(payload), &command); err != nil {
+ 			return fmt.Errorf("unmarshal CancelOrder: %w", err)
+ 		}
+ 		events = engine.HandleCancelOrder(command, commandSeq)
+
++	case "SuspendMarket":
++		var command message.SuspendMarketCommand
++		if err := json.Unmarshal([]byte(payload), &command); err != nil {
++			return fmt.Errorf("unmarshal SuspendMarket: %w", err)
++		}
++		events = engine.HandleSuspendMarket(command, commandSeq)
++
+ 	default:
+ 		return fmt.Errorf("unknown message type: %s", messageType)
+```
 
 ---
 
-### 7A-4: Tạo `TradeSettlementService`
+### NestJS Backend (9 files)
 
-**File**: `src/modules/engine-events/trade-settlement.service.ts`
+---
+
+#### [MODIFY] `src/modules/engine/types/open-market.types.ts`
+
+Thêm `SuspendMarketPayload` vào cùng file với `OpenMarketPayload` — cùng là engine command payloads:
+
+```ts
+// Đã có:
+export interface OpenMarketPayload { ... }
+
+// Thêm mới:
+export interface SuspendMarketPayload {
+  tradingPairId: string;
+  market: string;
+  reason: string;
+  suspendedAt: string;
+}
+```
+
+#### [MODIFY] `src/modules/engine/types/index.ts`
+
+```diff
+ export * from './open-market.types';
++// SuspendMarketPayload re-exported from open-market.types
+```
+
+_(Nếu `SuspendMarketPayload` đã export qua `open-market.types.ts`, `index.ts` tự re-export — không cần thay đổi)_
+
+---
+
+#### [NEW] `src/modules/admin/dto/lock-user.dto.ts`
+
+```ts
+import { IsOptional, IsString, MaxLength } from "class-validator";
+
+export class LockUserDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+```
+
+---
+
+#### [NEW] `src/modules/admin/admin.service.ts`
+
+Service chứa toàn bộ business logic cho admin operations.
+
+**User Management:**
+
+- `listUsers()` — phân trang, loại bỏ SYSTEM users
+- `lockUser(userId, reason?)` — set status=LOCKED, lockedAt, lockedReason + revoke all sessions
+- `unlockUser(userId)` — set status=ACTIVE, clear lockedAt/lockedReason
+
+**Asset Management:**
+
+- `listAssets()` — trả về tất cả assets
+- `activateAsset(assetId)` — set status=ACTIVE
+- `deactivateAsset(assetId)` — set status=INACTIVE
+
+**Market Management:**
+
+- `listMarkets()` — trả về tất cả markets + base/quote asset info
+- `openMarket(marketId)` — validate SUSPENDED → create OpenMarket outbox event (reuse pattern từ `OpenMarketBootstrapService`)
+- `suspendMarket(marketId, reason?)` — validate READY → set SUSPENDED + create SuspendMarket outbox event (cùng transaction)
 
 ```ts
 @Injectable()
-export class TradeSettlementService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly walletBalance: WalletBalanceService,
-  ) {}
+export class AdminService {
+  constructor(private readonly prisma: PrismaService) {}
 
-  async settle(payload: TradeCreatedPayload, tx: PrismaTx): Promise<void> {
-    // 1. Fetch trading pair for feeRate + assetIds
-    // 2. Fetch buy and sell orders (FOR UPDATE để lock)
-    // 3. Calculate fees
-    // 4. Create Trade record (engineMatchId unique → idempotent)
-    // 5. Update orders (filledQuantity, remainingQuantity, status)
-    // 6. Move wallets
+  // ─── Users ──────────────────────────────────────────────────────────────
+  async listUsers(cursor?: string, limit = 20) {
+    /* ... */
+  }
+
+  async lockUser(userId: string, reason?: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+
+      if (user.role !== UserRole.USER)
+        throw new ForbiddenException("Cannot lock non-USER accounts");
+      if (user.status === UserStatus.LOCKED)
+        throw new ConflictException("User is already locked");
+
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          status: UserStatus.LOCKED,
+          lockedAt: new Date(),
+          lockedReason: reason ?? null,
+        },
+      });
+
+      // Revoke all active sessions → force logout
+      await tx.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
+  }
+
+  async unlockUser(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
+    if (user.status !== UserStatus.LOCKED)
+      throw new ConflictException("User is not locked");
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        status: UserStatus.ACTIVE,
+        lockedAt: null,
+        lockedReason: null,
+      },
+    });
+  }
+
+  // ─── Assets ─────────────────────────────────────────────────────────────
+  async listAssets() {
+    /* ... */
+  }
+
+  async activateAsset(assetId: string): Promise<void> {
+    await this.prisma.asset.update({
+      where: { id: assetId },
+      data: { status: AssetStatus.ACTIVE },
+    });
+  }
+
+  async deactivateAsset(assetId: string): Promise<void> {
+    await this.prisma.asset.update({
+      where: { id: assetId },
+      data: { status: AssetStatus.INACTIVE },
+    });
+  }
+
+  // ─── Markets ────────────────────────────────────────────────────────────
+  async listMarkets() {
+    /* ... */
+  }
+
+  async openMarket(marketId: string): Promise<{ status: string }> {
+    await this.prisma.$transaction(async (tx) => {
+      const pair = await tx.tradingPair.findUniqueOrThrow({
+        where: { id: marketId },
+        include: { baseAsset: true, quoteAsset: true },
+      });
+
+      if (pair.status !== TradingPairStatus.SUSPENDED)
+        throw new ConflictException(
+          `Market must be SUSPENDED to open, current: ${pair.status}`,
+        );
+
+      // Giữ DB SUSPENDED → đợi Engine trả MarketOpened → Consumer set READY
+      const cmdSeq = await nextCommandSequence(tx, pair.id);
+      const payload: OpenMarketPayload = {
+        /* ... */
+      };
+
+      await tx.outboxEvent.create({
+        data: {
+          messageId: uuidv7(),
+          version: 1,
+          correlationId: uuidv7(),
+          streamName: ENGINE_COMMANDS_STREAM,
+          messageType: "OpenMarket",
+          partitionKey: pair.id,
+          commandSequence: cmdSeq,
+          occurredAt: new Date(),
+          payload: payload as unknown as Prisma.InputJsonValue,
+        },
+      });
+    });
+    return { status: "OPENING" };
+  }
+
+  async suspendMarket(
+    marketId: string,
+    reason?: string,
+  ): Promise<{ status: string }> {
+    await this.prisma.$transaction(async (tx) => {
+      const pair = await tx.tradingPair.findUniqueOrThrow({
+        where: { id: marketId },
+      });
+
+      if (pair.status !== TradingPairStatus.READY)
+        throw new ConflictException(
+          `Market must be READY to suspend, current: ${pair.status}`,
+        );
+
+      // 1. Set DB SUSPENDED ngay → PlaceOrder bị block ngay lập tức
+      await tx.tradingPair.update({
+        where: { id: marketId },
+        data: { status: TradingPairStatus.SUSPENDED },
+      });
+
+      // 2. Create outbox SuspendMarket → Engine cũng chuyển SUSPENDED
+      const cmdSeq = await nextCommandSequence(tx, pair.id);
+      const payload: SuspendMarketPayload = {
+        tradingPairId: pair.id,
+        market: pair.symbol,
+        reason: reason ?? "Admin suspended",
+        suspendedAt: new Date().toISOString(),
+      };
+
+      await tx.outboxEvent.create({
+        data: {
+          messageId: uuidv7(),
+          version: 1,
+          correlationId: uuidv7(),
+          streamName: ENGINE_COMMANDS_STREAM,
+          messageType: "SuspendMarket",
+          partitionKey: pair.id,
+          commandSequence: cmdSeq,
+          occurredAt: new Date(),
+          payload: payload as unknown as Prisma.InputJsonValue,
+        },
+      });
+    });
+    return { status: "SUSPENDED" };
   }
 }
 ```
 
 ---
 
-### 7A-5: Tạo migration Prisma (settledAt nullable đã fix)
+#### [NEW] `src/modules/admin/admin-users.controller.ts`
+
+```ts
+@Controller('admin/users')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN)
+export class AdminUsersController {
+  constructor(private readonly adminService: AdminService) {}
+
+  @Get()
+  listUsers(
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) { ... }
+
+  @Post(':userId/lock')
+  @HttpCode(HttpStatus.OK)
+  lockUser(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: LockUserDto,
+  ) { ... }
+
+  @Post(':userId/unlock')
+  @HttpCode(HttpStatus.OK)
+  unlockUser(
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) { ... }
+}
+```
+
+---
+
+#### [NEW] `src/modules/admin/admin-assets.controller.ts`
+
+```ts
+@Controller('admin/assets')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN)
+export class AdminAssetsController {
+  constructor(private readonly adminService: AdminService) {}
+
+  @Get()
+  listAssets() { ... }
+
+  @Post(':assetId/activate')
+  @HttpCode(HttpStatus.OK)
+  activateAsset(@Param('assetId', ParseUUIDPipe) assetId: string) { ... }
+
+  @Post(':assetId/deactivate')
+  @HttpCode(HttpStatus.OK)
+  deactivateAsset(@Param('assetId', ParseUUIDPipe) assetId: string) { ... }
+}
+```
+
+---
+
+#### [NEW] `src/modules/admin/admin-markets.controller.ts`
+
+```ts
+@Controller('admin/markets')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN)
+export class AdminMarketsController {
+  constructor(private readonly adminService: AdminService) {}
+
+  @Get()
+  listMarkets() { ... }
+
+  @Post(':marketId/open')
+  @HttpCode(HttpStatus.OK)
+  openMarket(@Param('marketId', ParseUUIDPipe) marketId: string) { ... }
+
+  @Post(':marketId/suspend')
+  @HttpCode(HttpStatus.OK)
+  suspendMarket(
+    @Param('marketId', ParseUUIDPipe) marketId: string,
+    @Body() body: { reason?: string },
+  ) { ... }
+}
+```
+
+---
+
+#### [NEW] `src/modules/admin/admin.module.ts`
+
+```ts
+@Module({
+  controllers: [
+    AdminUsersController,
+    AdminAssetsController,
+    AdminMarketsController,
+  ],
+  providers: [AdminService],
+})
+export class AdminModule {}
+```
+
+---
+
+#### [MODIFY] `src/app.module.ts`
+
+```diff
+ import { MarketModule } from './modules/market/market.module';
++import { AdminModule } from './modules/admin/admin.module';
+
+ @Module({
+   imports: [
+     ...
+     MarketModule,
++    AdminModule,
+   ],
+```
+
+---
+
+#### [MODIFY] `src/modules/engine-events/engine-event-consumer.service.ts`
+
+Thêm `MarketSuspended` case trong `dispatch`:
+
+```diff
+       case 'MarketOpened':
+         await tx.tradingPair.updateMany({
+           where: { id: tradingPairId },
+           data: { status: 'READY' },
+         });
+         break;
+
++      case 'MarketSuspended':
++        // DB already set to SUSPENDED by admin action — this is a no-op confirmation.
++        // Only process if status isn't already SUSPENDED (defensive).
++        await tx.tradingPair.updateMany({
++          where: { id: tradingPairId, status: { not: 'SUSPENDED' } },
++          data: { status: 'SUSPENDED' },
++        });
++        break;
+```
+
+---
+
+## Business Rules Checklist
+
+| Rule                                                              | Triển khai                                   |
+| ----------------------------------------------------------------- | -------------------------------------------- |
+| Admin không đặt lệnh thay User                                    | ✅ Không có endpoint PlaceOrder trong admin  |
+| Admin không cancel Order User                                     | ✅ Không có endpoint Cancel trong admin      |
+| Open: DB giữ SUSPENDED → Outbox OpenMarket → MarketOpened → READY | ✅ `openMarket()`                            |
+| Suspend: DB → SUSPENDED + Outbox SuspendMarket (cùng TX)          | ✅ `suspendMarket()`                         |
+| Suspend không tự hủy Open Orders                                  | ✅ Engine chỉ set state, không cancel orders |
+| Cancel vẫn cho phép khi SUSPENDED                                 | ✅ Sửa Go engine `HandleCancelOrder`         |
+| Locked User không login/refresh được                              | ✅ AuthService đã check (lines 84, 148)      |
+| Lock user revoke sessions                                         | ✅ `lockUser()` revoke all sessions          |
+| Cannot lock ADMIN/SYSTEM                                          | ✅ Check `role !== UserRole.USER`            |
+
+---
+
+## Thứ Tự Thực Hiện
+
+```
+Step 1.  Go: HandleSuspendMarket + MarketSuspendedPayload + dispatch case
+Step 2.  Go: Fix HandleCancelOrder cho phép khi SUSPENDED
+Step 3.  Go: go build → verify compile
+Step 4.  NestJS: Tạo admin types + DTO
+Step 5.  NestJS: Tạo AdminService (users, assets, markets)
+Step 6.  NestJS: Tạo 3 controllers
+Step 7.  NestJS: Tạo AdminModule
+Step 8.  NestJS: Register AdminModule trong AppModule
+Step 9.  NestJS: Thêm MarketSuspended case trong engine-event-consumer
+Step 10. NestJS: tsc --noEmit + eslint → 0 errors
+Step 11. Manual test: Admin login → lock user → suspend/open market
+```
+
+---
+
+## Verification Plan
+
+### Automated Tests
 
 ```bash
-npx prisma migrate dev --name trade_settlement_nullable_settled_at
+# TypeScript compile check
+cd apps/backend && npx tsc --noEmit
+
+# ESLint check
+cd apps/backend && node_modules/.bin/eslint "src/**/*.ts"
+
+# Go compile check
+cd services/matching-engine && go build ./cmd/engine
+
+# Go unit tests
+cd services/matching-engine && go test ./...
 ```
 
----
+### Manual Verification
 
-## Phase 7B — WebSocket Gateway (Real-time Market Data)
+Sử dụng cURL hoặc Postman:
 
-### 7B-1: Setup WebSocket module
+```bash
+# 1. Login as admin
+curl -X POST http://localhost:3000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@haucex.com","password":"123456"}'
+# → Save access token as ADMIN_TOKEN
 
-**Install**: `@nestjs/websockets`, `@nestjs/platform-socket.io`, `socket.io`
+# 2. List users
+curl http://localhost:3000/api/v1/admin/users \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 
-**File**: `src/modules/market/market.gateway.ts`
+# 3. Lock user (alice)
+curl -X POST http://localhost:3000/api/v1/admin/users/<alice-uuid>/lock \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"Test lock"}'
 
-Dùng **Socket.IO** (dễ hơn raw WS, hỗ trợ rooms tốt).
+# 4. Verify alice cannot login
+curl -X POST http://localhost:3000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@haucex.com","password":"123456"}'
+# → Expected: 403 Forbidden
 
-```ts
-@WebSocketGateway({ cors: true, namespace: "/market" })
-export class MarketGateway implements OnGatewayConnection {
-  // Client join room theo symbol: socket.join('orderbook:BTC-USDT')
-  // Broadcast OrderBookChanged events
-  // Broadcast TradeCreated events (recent trades)
-}
+# 5. Unlock alice
+curl -X POST http://localhost:3000/api/v1/admin/users/<alice-uuid>/unlock \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# 6. Suspend market
+curl -X POST http://localhost:3000/api/v1/admin/markets/<btcusdt-uuid>/suspend \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"Maintenance"}'
+
+# 7. Verify PlaceOrder blocked
+# (alice tries to place order → should get MarketSuspendedException)
+
+# 8. Open market
+curl -X POST http://localhost:3000/api/v1/admin/markets/<btcusdt-uuid>/open \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# → Wait ~1 second for MarketOpened event
+
+# 9. List markets (verify status = READY)
+curl http://localhost:3000/api/v1/admin/markets \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# 10. Role guard test — normal user should get 403
+curl http://localhost:3000/api/v1/admin/users \
+  -H "Authorization: Bearer $USER_TOKEN"
+# → Expected: 403 Forbidden
 ```
 
-**Rooms**:
+### Kiểm tra đặc biệt
 
-- `orderbook:{symbol}` — nhận OrderBookChanged
-- `trades:{symbol}` — nhận recent trades
-- `ticker:{symbol}` — nhận 24h ticker updates
-
----
-
-### 7B-2: Engine Events → WebSocket bridge
-
-Khi `EngineEventConsumerService` xử lý xong:
-
-- `OrderBookChanged` → broadcast `orderbook:{symbol}` room
-- `TradeCreated` → broadcast `trades:{symbol}` room
-
-Inject `MarketGateway` vào `EngineEventConsumerService`.
-
-**Event format** cho client:
-
-```ts
-// orderbook update
-{
-  type: 'ORDERBOOK_UPDATE',
-  symbol: 'BTC-USDT',
-  bids: [['50000.000000000000000000', '1.5', '2'], ...],  // [price, qty, count]
-  asks: [['50001.000000000000000000', '0.8', '1'], ...],
-  sequence: '1051'
-}
-
-// trade
-{
-  type: 'TRADE',
-  symbol: 'BTC-USDT',
-  price: '50000.5',
-  quantity: '0.1',
-  takerSide: 'BUY',
-  matchedAt: '2026-10-09T08:00:00Z'
-}
-```
-
----
-
-### 7B-3: Public REST API — Market Data
-
-**File**: `src/modules/market/market.controller.ts`
-
-```
-GET /market/orderbook/:symbol      — snapshot hiện tại (query từ DB/cache)
-GET /market/trades/:symbol         — 50 giao dịch gần nhất
-GET /market/ticker/:symbol         — 24h stats (open, high, low, close, volume)
-GET /market/pairs                  — danh sách trading pairs + trạng thái
-```
-
-> **Lưu ý**: Orderbook snapshot không query từ Redis stream mà từ in-memory state của Go engine. Tuy nhiên vì backend không có state của engine, cần lưu orderbook snapshot vào DB/Redis sau mỗi `OrderBookChanged` event.
-
-**Approach**: Khi nhận `OrderBookChanged`, lưu bids/asks vào Redis (`HSET market:orderbook:BTC-USDT bids [...] asks [...]`) với TTL. REST API đọc từ Redis.
-
----
-
-## Phase 7C — Order Status & UX Improvements
-
-### 7C-1: Order status corrections
-
-Khi settlement xảy ra, Go engine đã emit:
-
-- `OrderOpened` → backend set `OPEN`
-- `TradeCreated` → backend cập nhật `PARTIALLY_FILLED` hoặc `FILLED`
-- `OrderCancelled` → backend set `CANCELLED`
-
-Cần đảm bảo:
-
-- Nếu một lệnh được fill 100% ngay khi đặt (immediate fill), không có `OrderOpened` event — chỉ có `TradeCreated` với `buyOrderRemainingQuantity == 0`. Handler cần set order thẳng từ `PENDING → FILLED`.
-
----
-
-### 7C-2: GET /orders/:id — thêm trades
-
-**File**: `src/modules/orders/order-query.service.ts`
-
-Thêm endpoint hoặc modify existing để trả về trades liên quan đến order:
-
-```
-GET /orders/:id/trades
-```
-
----
-
-## Phase 7D — Infrastructure & DevOps
-
-### 7D-1: Docker Compose hoàn chỉnh
-
-`docker-compose.yml` đã có `matching-engine` service + Dockerfile. Cần thêm:
-
-```yaml
-backend-api:
-  build:
-    context: ./apps/backend
-    dockerfile: Dockerfile.api
-  command: node dist/main-api.js
-  ports: ["3000:3000"]
-  depends_on: [postgres, redis]
-
-backend-worker:
-  build:
-    context: ./apps/backend
-    dockerfile: Dockerfile.worker
-  command: node dist/main-worker.js
-  depends_on: [postgres, redis]
-```
-
-Tạo `Dockerfile` cho backend (multi-stage build).
-
-### 7D-2: Environment variables
-
-Tạo `.env.example` với tất cả các biến cần thiết.
-
-### 7D-3: `prisma migrate deploy` trong entrypoint
-
-Đảm bảo migrations chạy tự động khi container khởi động.
-
----
-
-## Thứ tự implement (theo độ ưu tiên)
-
-```
-Step 1.  Tạo Prisma migration (settledAt nullable)
-Step 2.  Tạo TradeSettlementService (7A-4)
-Step 3.  Implement TradeCreated handler (7A-1) dùng TradeSettlementService
-Step 4.  Implement OrderCancelled handler (7A-2)
-Step 5.  Implement CancelOrderRejected handler (7A-3)
-Step 6.  tsc --noEmit + test thủ công flow end-to-end với Docker Compose
-Step 7.  Setup WebSocket Gateway (7B-1)
-Step 8.  Bridge engine events → WebSocket (7B-2)
-Step 9.  Lưu orderbook snapshot vào Redis (7B-3 prep)
-Step 10. Public REST API market data (7B-3)
-Step 11. GET /orders/:id/trades (7C-2)
-Step 12. Dockerfile backend (7D-1)
-Step 13. docker-compose hoàn chỉnh (7D-1)
-Step 14. .env.example (7D-2)
-```
-
----
-
-## Definition of Done
-
-### Phase 7A — Settlement (Critical)
-
-- [ ] `TradeCreated` event: tạo Trade record + cập nhật wallets + cập nhật orders
-- [ ] `OrderCancelled` event: unlock remaining locked amount + set CANCELLED
-- [ ] `CancelOrderRejected` event: revert order status về OPEN/PARTIALLY_FILLED
-- [ ] Idempotency: replay event không tạo duplicate trades hoặc wallet mutations
+- [ ] User với role USER gọi `/admin/*` → 403
+- [ ] Lock ADMIN account → ForbiddenException (không cho lock admin)
+- [ ] Lock SYSTEM account → ForbiddenException
+- [ ] Suspend market SUSPENDED → ConflictException
+- [ ] Open market READY → ConflictException
+- [ ] Cancel order vẫn hoạt động khi market SUSPENDED
 - [ ] `tsc --noEmit` → 0 errors
-
-### Phase 7B — WebSocket
-
-- [ ] Client kết nối WebSocket, join room `orderbook:BTC-USDT`
-- [ ] Sau mỗi trade, client nhận update real-time
-- [ ] `GET /market/orderbook/BTC-USDT` trả về current snapshot
-- [ ] `GET /market/trades/BTC-USDT` trả về 50 giao dịch gần nhất
-
-### Phase 7C — Infrastructure
-
-- [ ] `docker compose up` chạy được toàn bộ stack
-- [ ] Flow end-to-end: deposit → place order → match → trade → wallet updated
+- [ ] `eslint` → 0 errors/warnings
+- [ ] `go build` → clean
