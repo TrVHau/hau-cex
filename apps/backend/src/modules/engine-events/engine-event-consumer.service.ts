@@ -291,6 +291,13 @@ export class EngineEventConsumerService
         });
         break;
 
+      case 'MarketSuspended':
+        await tx.tradingPair.updateMany({
+          where: { id: tradingPairId, status: { not: 'SUSPENDED' } },
+          data: { status: 'SUSPENDED' },
+        });
+        break;
+
       case 'OrderOpened':
         await tx.order.updateMany({
           where: {
