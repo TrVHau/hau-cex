@@ -32,15 +32,24 @@ export class WalletsService {
     userId: string,
     query: LedgerQueryDto,
   ): Promise<LedgerPageDto> {
-    const { assetSymbol, asset, limit = 20, cursor } = query;
-    const targetAsset = assetSymbol || asset;
+    const {
+      assetSymbol,
+      asset,
+      entryType,
+      balanceType,
+      limit = 20,
+      cursor,
+    } = query;
+    const targetAsset = (assetSymbol || asset)?.trim().toUpperCase();
     const cursorFilter = buildCursorWhere(cursor);
 
     const where: Prisma.LedgerEntryWhereInput = {
       userId,
       ...(targetAsset && {
-        asset: { symbol: { equals: targetAsset, mode: 'insensitive' } },
+        asset: { symbol: targetAsset },
       }),
+      ...(entryType && { entryType }),
+      ...(balanceType && { balanceType }),
       ...(cursorFilter && { OR: cursorFilter.OR }),
     };
 
@@ -63,11 +72,12 @@ export class WalletsService {
     userId: string,
     assetSymbol: string,
   ): Promise<Wallet> {
+    const normalizedSymbol = assetSymbol.trim().toUpperCase();
     const wallet = await this.prisma.wallet.findFirst({
       where: {
         userId,
         asset: {
-          symbol: { equals: assetSymbol.toUpperCase(), mode: 'insensitive' },
+          symbol: normalizedSymbol,
         },
       },
     });

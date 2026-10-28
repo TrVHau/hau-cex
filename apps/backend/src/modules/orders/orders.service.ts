@@ -18,6 +18,7 @@ import {
   PrismaTx,
   ReferenceType,
   ValidationException,
+  WalletNotFoundException,
 } from '../../common';
 import { v7 as uuidv7 } from 'uuid';
 import { CancelOrderRow } from './types';
@@ -50,10 +51,11 @@ export class OrdersService {
           },
         });
 
+        const normalizedSymbol = dto.symbol.trim().toUpperCase();
         const price = new Prisma.Decimal(dto.price);
         const quantity = new Prisma.Decimal(dto.quantity);
         const payLoadHash = hashOrderPayload(
-          dto.symbol,
+          normalizedSymbol,
           dto.side.toString(),
           dto.type.toString(),
           price,
@@ -73,7 +75,7 @@ export class OrdersService {
         // validate
         const pair = await tx.tradingPair.findUnique({
           where: {
-            symbol: dto.symbol,
+            symbol: normalizedSymbol,
           },
         });
         if (!pair) throw new MarketNotFoundException();
@@ -82,25 +84,53 @@ export class OrdersService {
         if (pair.status !== TradingPairStatus.READY)
           throw new MarketNotReadyException();
 
-        if (price.lte(0)) throw new ValidationException();
-        if (quantity.lte(0)) throw new ValidationException();
-        if (!price.mod(pair.tickSize).isZero()) throw new ValidationException();
-        if (!quantity.mod(pair.stepSize).isZero())
-          throw new ValidationException();
-        if (quantity.lt(pair.minQuantity)) throw new ValidationException();
-        if (quantity.mul(price).lt(pair.minNotional))
-          throw new ValidationException();
+        if (price.lte(0)) {
+          throw new ValidationException('Price must be greater than zero');
+        }
+        if (quantity.lte(0)) {
+          throw new ValidationException('Quantity must be greater than zero');
+        }
+        if (!price.mod(pair.tickSize).isZero()) {
+          throw new ValidationException(
+            `Price must be a multiple of tick size (${pair.tickSize.toString()})`,
+          );
+        }
+        if (!quantity.mod(pair.stepSize).isZero()) {
+          throw new ValidationException(
+            `Quantity must be a multiple of step size (${pair.stepSize.toString()})`,
+          );
+        }
+        if (quantity.lt(pair.minQuantity)) {
+          throw new ValidationException(
+            `Quantity must be at least min quantity (${pair.minQuantity.toString()})`,
+          );
+        }
+        if (quantity.mul(price).lt(pair.minNotional)) {
+          throw new ValidationException(
+            `Order notional (price * quantity) must be at least min notional (${pair.minNotional.toString()})`,
+          );
+        }
 
-        // caculate lockamount
+        // calculate lockamount
         const isBuy = dto.side === 'BUY';
         const lockedAssetId = isBuy ? pair.quoteAssetId : pair.baseAssetId;
         const lockedAmount = isBuy ? price.mul(quantity) : quantity;
 
-        // lock wallet balance
-        const wallet = await this.walletsService.findWalletByAssetId(
-          userId,
-          lockedAssetId,
-        );
+        // lock wallet balance inside current transaction
+        const wallet = await tx.wallet.findUnique({
+          where: {
+            userId_assetId: {
+              userId,
+              assetId: lockedAssetId,
+            },
+          },
+          select: { id: true },
+        });
+        if (!wallet) {
+          throw new WalletNotFoundException(
+            `user ${userId} and asset ${lockedAssetId}`,
+          );
+        }
         await this.walletBalanceService.moveAvailableToLocked(tx, {
           walletId: wallet.id,
           amount: lockedAmount,
@@ -171,7 +201,7 @@ export class OrdersService {
 
   async cancelOrder(userId: string, orderId: string) {
     return this.prismaService.$transaction(async (tx: PrismaTx) => {
-      // lockrow to prevent race settle race condition
+      // Lock only the order row (FOR UPDATE OF o) to prevent blocking other transactions on the same trading pair
       const rows = await tx.$queryRaw<
         CancelOrderRow[]
       >`SELECT o.id, o.user_id, o.status, o.trading_pair_id,
@@ -179,7 +209,7 @@ export class OrdersService {
         FROM orders o
         JOIN trading_pairs tp ON tp.id = o.trading_pair_id
         WHERE o.id = ${orderId}::uuid
-        FOR UPDATE`;
+        FOR UPDATE OF o`;
 
       const order = rows[0];
       if (!order || order.user_id !== userId)

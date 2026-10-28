@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { OrderStatus, Prisma } from '../../generated/prisma';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
 import { OrderCancelledPayload, CancelOrderRejectedPayload } from './types';
 import { PrismaTx, ReferenceType } from '../../common';
@@ -14,7 +15,14 @@ export class OrderCancellationService {
     payload: OrderCancelledPayload,
     tx: PrismaTx,
   ): Promise<void> {
-    // 1. Find and validate the order
+    // 1. Lock the order row to prevent race conditions with concurrent trade settlements
+    await tx.$queryRaw`
+      SELECT id FROM orders
+      WHERE id = ${payload.orderId}::uuid
+      FOR UPDATE
+    `;
+
+    // Fetch order state after acquiring lock
     const order = await tx.order.findUniqueOrThrow({
       where: { id: payload.orderId },
       select: {
@@ -27,12 +35,24 @@ export class OrderCancellationService {
       },
     });
 
+    // Terminal state guard: once an order is FILLED, CANCELLED, or REJECTED, it cannot be cancelled
+    if (
+      order.status === OrderStatus.FILLED ||
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.REJECTED
+    ) {
+      this.logger.warn(
+        `Order ${order.id} is already in terminal state ${order.status}, ignoring OrderCancelled event`,
+      );
+      return;
+    }
+
     // 2. Update order status
     await tx.order.update({
       where: { id: order.id },
       data: {
-        status: 'CANCELLED',
-        remainingLockedAmount: 0,
+        status: OrderStatus.CANCELLED,
+        remainingLockedAmount: new Prisma.Decimal(0),
       },
     });
 
@@ -66,7 +86,14 @@ export class OrderCancellationService {
     payload: CancelOrderRejectedPayload,
     tx: PrismaTx,
   ): Promise<void> {
-    // 1. Find the order
+    // 1. Lock the order row
+    await tx.$queryRaw`
+      SELECT id FROM orders
+      WHERE id = ${payload.orderId}::uuid
+      FOR UPDATE
+    `;
+
+    // Fetch the order after lock
     const order = await tx.order.findUniqueOrThrow({
       where: { id: payload.orderId },
       select: {
@@ -76,7 +103,7 @@ export class OrderCancellationService {
       },
     });
 
-    if (order.status !== 'CANCEL_PENDING') {
+    if (order.status !== OrderStatus.CANCEL_PENDING) {
       this.logger.warn(
         `CancelOrderRejected for order ${payload.orderId} but status is ${order.status}, skipping`,
       );
@@ -85,8 +112,8 @@ export class OrderCancellationService {
 
     // 2. Determine new status based on filled quantity
     const newStatus = order.filledQuantity.greaterThan(0)
-      ? 'PARTIALLY_FILLED'
-      : 'OPEN';
+      ? OrderStatus.PARTIALLY_FILLED
+      : OrderStatus.OPEN;
 
     // 3. Update order status — revert back from CANCEL_PENDING
     await tx.order.update({

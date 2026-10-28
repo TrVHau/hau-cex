@@ -25,6 +25,7 @@ export class OrderQueryService {
     userId: string,
     symbol?: string,
   ): Promise<OrderResponseDto[]> {
+    const normalizedSymbol = symbol?.trim().toUpperCase();
     const orders = await this.prisma.order.findMany({
       where: {
         userId,
@@ -36,7 +37,7 @@ export class OrderQueryService {
             OrderStatus.CANCEL_PENDING,
           ],
         },
-        ...(symbol && { tradingPair: { symbol } }),
+        ...(normalizedSymbol && { tradingPair: { symbol: normalizedSymbol } }),
       },
       orderBy: {
         createdAt: 'desc',
@@ -55,11 +56,12 @@ export class OrderQueryService {
     query: OrderListQueryDto,
   ): Promise<OrderListResponseDto> {
     const { symbol, limit = 20, cursor } = query;
+    const normalizedSymbol = symbol?.trim().toUpperCase();
     const cursorFilter = buildCursorWhere(cursor);
 
     const where: Prisma.OrderWhereInput = {
       userId,
-      ...(symbol && { tradingPair: { symbol } }),
+      ...(normalizedSymbol && { tradingPair: { symbol: normalizedSymbol } }),
       ...(cursorFilter && { OR: cursorFilter.OR }),
     };
 

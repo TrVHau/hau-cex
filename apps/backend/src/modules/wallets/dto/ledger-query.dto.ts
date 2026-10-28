@@ -1,5 +1,6 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { CursorPaginationQueryDto } from '../../../common';
+import { LedgerBalanceType, LedgerEntryType } from '../../../generated/prisma';
 
 export class LedgerQueryDto extends CursorPaginationQueryDto {
   @IsString()
@@ -10,11 +11,11 @@ export class LedgerQueryDto extends CursorPaginationQueryDto {
   @IsOptional()
   assetSymbol?: string;
 
-  @IsString()
+  @IsEnum(LedgerEntryType)
   @IsOptional()
-  entryType?: string;
+  entryType?: LedgerEntryType;
 
-  @IsString()
+  @IsEnum(LedgerBalanceType)
   @IsOptional()
-  balanceType?: string;
+  balanceType?: LedgerBalanceType;
 }

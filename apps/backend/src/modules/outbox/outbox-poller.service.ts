@@ -6,6 +6,7 @@ import {
   OnApplicationShutdown,
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
+import { Prisma } from '../../generated/prisma';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { OutboxRow } from './types';
 
@@ -47,9 +48,10 @@ export class OutboxPollerService
 
   private async processBatch(): Promise<boolean> {
     // Step 1: Fetch and lock rows in a short Postgres-only transaction.
-    // No Redis calls here — Redis is NOT part of the Postgres transaction.
+    // We atomically lease the selected rows by setting next_retry_at into the future (30s)
+    // so other pollers or rapid re-cycles will not re-select them while in-flight.
     const rows = await this.prisma.$transaction(async (tx) => {
-      return tx.$queryRaw<OutboxRow[]>`
+      const selected = await tx.$queryRaw<OutboxRow[]>`
         SELECT id, message_id, stream_name, partition_key,
                command_sequence, message_type, payload, retry_count
         FROM outbox_events
@@ -59,16 +61,31 @@ export class OutboxPollerService
         LIMIT 50
         FOR UPDATE SKIP LOCKED
       `;
+
+      if (selected.length > 0) {
+        const ids = selected.map((r) => Prisma.sql`${r.id}::uuid`);
+        await tx.$executeRaw`
+          UPDATE outbox_events
+          SET next_retry_at = NOW() + INTERVAL '30 seconds'
+          WHERE id IN (${Prisma.join(ids)})
+        `;
+      }
+
+      return selected;
     });
 
     if (rows.length === 0) return false;
 
     // Step 2 & 3: Publish to Redis, then update Postgres — both outside the lock tx.
-    // If Redis succeeds but Postgres update fails, the row stays PENDING and will be
-    // retried; the engine-event consumer's processedEvent idempotency guard prevents
-    // double-processing on re-delivery.
+    // If Redis succeeds but Postgres update fails, the row will be retried after the 30s lease;
+    // the engine-event consumer's processedEvent idempotency guard prevents double-processing.
     for (const row of rows) {
       try {
+        const payloadStr =
+          typeof row.payload === 'string'
+            ? row.payload
+            : JSON.stringify(row.payload);
+
         await this.redis.xadd(
           row.stream_name,
           '*',
@@ -81,13 +98,14 @@ export class OutboxPollerService
           'commandSeq',
           row.command_sequence?.toString() ?? '',
           'payload',
-          JSON.stringify(row.payload),
+          payloadStr,
         );
 
         await this.prisma.$executeRaw`
           UPDATE outbox_events
           SET status = 'PUBLISHED'::outbox_status,
-              published_at = NOW()
+              published_at = NOW(),
+              next_retry_at = NULL
           WHERE id = ${row.id}::uuid
         `;
       } catch (error) {

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma';
+import { OrderStatus, Prisma } from '../../generated/prisma';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
 import { TradeCreatedPayload } from './types';
 import { PrismaTx, ReferenceType } from '../../common';
@@ -21,7 +21,7 @@ export class TradeSettlementService {
     const executionPrice = new Prisma.Decimal(payload.executionPrice);
     const quoteAmount = executedQuantity.mul(executionPrice);
 
-    // 1. Fetch trading pair for fee rates and asset IDs
+    //  Fetch trading pair for fee rates and asset IDs
     const tradingPair = await tx.tradingPair.findUniqueOrThrow({
       where: { id: payload.tradingPairId },
       select: {
@@ -32,7 +32,7 @@ export class TradeSettlementService {
       },
     });
 
-    // 2. Determine fee rates per side
+    //  Determine fee rates per side
     const isTakerBuy = payload.takerSide === 'BUY';
     const buyerFeeRate = isTakerBuy
       ? tradingPair.takerFeeRate
@@ -45,13 +45,26 @@ export class TradeSettlementService {
     const buyerFeeAmount = executedQuantity.mul(buyerFeeRate);
     const sellerFeeAmount = quoteAmount.mul(sellerFeeRate);
 
-    // 3. Fetch orders to get userIds
+    // Pre-lock orders in ascending ID order to prevent lost updates & deadlocks
+    const sortedOrderIds = Array.from(
+      new Set([payload.buyOrderId, payload.sellOrderId]),
+    ).sort((a, b) => a.localeCompare(b));
+
+    await tx.$queryRaw`
+      SELECT id FROM orders
+      WHERE id IN (${Prisma.join(sortedOrderIds.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY id ASC
+      FOR UPDATE
+    `;
+
+    // Fetch orders to get userIds, current quantities, and status
     const [buyOrder, sellOrder] = await Promise.all([
       tx.order.findUniqueOrThrow({
         where: { id: payload.buyOrderId },
         select: {
           id: true,
           userId: true,
+          status: true,
           filledQuantity: true,
           remainingQuantity: true,
         },
@@ -61,13 +74,14 @@ export class TradeSettlementService {
         select: {
           id: true,
           userId: true,
+          status: true,
           filledQuantity: true,
           remainingQuantity: true,
         },
       }),
     ]);
 
-    // 4. Create Trade record (engineMatchId UNIQUE → idempotent)
+    // Create Trade record (engineMatchId UNIQUE → idempotent)
     const trade = await tx.trade.create({
       data: {
         id: payload.tradeId || undefined,
@@ -98,45 +112,102 @@ export class TradeSettlementService {
       },
     });
 
-    // 5. Update orders (filledQuantity, remainingQuantity, status)
+    // Update orders (filledQuantity, remainingQuantity, status)
+    // Order updates in ascending order of order ID to prevent order row deadlocks
     const buyNewRemaining = buyOrder.remainingQuantity.minus(executedQuantity);
     const sellNewRemaining =
       sellOrder.remainingQuantity.minus(executedQuantity);
 
-    await Promise.all([
-      tx.order.update({
-        where: { id: buyOrder.id },
+    const buyStatus = buyNewRemaining.isZero()
+      ? OrderStatus.FILLED
+      : buyOrder.status === OrderStatus.CANCEL_PENDING
+        ? OrderStatus.CANCEL_PENDING
+        : OrderStatus.PARTIALLY_FILLED;
+
+    const sellStatus = sellNewRemaining.isZero()
+      ? OrderStatus.FILLED
+      : sellOrder.status === OrderStatus.CANCEL_PENDING
+        ? OrderStatus.CANCEL_PENDING
+        : OrderStatus.PARTIALLY_FILLED;
+
+    const orderUpdates = [
+      {
+        id: buyOrder.id,
         data: {
           filledQuantity: buyOrder.filledQuantity.plus(executedQuantity),
           remainingQuantity: buyNewRemaining,
           remainingLockedAmount: { decrement: quoteAmount },
-          status: buyNewRemaining.isZero() ? 'FILLED' : 'PARTIALLY_FILLED',
+          status: buyStatus,
         },
-      }),
-      tx.order.update({
-        where: { id: sellOrder.id },
+      },
+      {
+        id: sellOrder.id,
         data: {
           filledQuantity: sellOrder.filledQuantity.plus(executedQuantity),
           remainingQuantity: sellNewRemaining,
           remainingLockedAmount: { decrement: executedQuantity },
-          status: sellNewRemaining.isZero() ? 'FILLED' : 'PARTIALLY_FILLED',
+          status: sellStatus,
         },
-      }),
+      },
+    ].sort((a, b) => a.id.localeCompare(b.id));
+
+    for (const update of orderUpdates) {
+      await tx.order.update({
+        where: { id: update.id },
+        data: update.data,
+      });
+    }
+
+    // Wallet mutations
+    // Pre-lock all involved wallets in ascending ID order to prevent deadlock
+    const [
+      buyerQuoteWallet,
+      buyerBaseWallet,
+      sellerBaseWallet,
+      sellerQuoteWallet,
+    ] = await Promise.all([
+      this.findWallet(tx, buyOrder.userId, tradingPair.quoteAssetId),
+      this.findWallet(tx, buyOrder.userId, tradingPair.baseAssetId),
+      this.findWallet(tx, sellOrder.userId, tradingPair.baseAssetId),
+      this.findWallet(tx, sellOrder.userId, tradingPair.quoteAssetId),
     ]);
 
-    // 6. Wallet mutations — find wallets by (userId, assetId) unique key
+    const treasuryBaseWallet = buyerFeeAmount.greaterThan(0)
+      ? await this.findOrCreateTreasuryWallet(tx, tradingPair.baseAssetId)
+      : null;
+
+    const treasuryQuoteWallet = sellerFeeAmount.greaterThan(0)
+      ? await this.findOrCreateTreasuryWallet(tx, tradingPair.quoteAssetId)
+      : null;
+
+    const allWalletIds = Array.from(
+      new Set(
+        [
+          buyerQuoteWallet.id,
+          buyerBaseWallet.id,
+          sellerBaseWallet.id,
+          sellerQuoteWallet.id,
+          treasuryBaseWallet?.id,
+          treasuryQuoteWallet?.id,
+        ].filter((id): id is string => Boolean(id)),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+
+    // Global lock acquisition in ascending order (roadmap §11 rule: Lock wallets theo id tăng dần)
+    await tx.$queryRaw`
+      SELECT id FROM wallets
+      WHERE id IN (${Prisma.join(allWalletIds.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY id ASC
+      FOR UPDATE
+    `;
+
     const operationId = uuidv7();
     const tradeRef = {
       referenceType: ReferenceType.TRADE,
       referenceId: trade.id,
     } as const;
 
-    // 6a. Buyer: debit locked QUOTE (price * qty already locked at order time)
-    const buyerQuoteWallet = await this.findWallet(
-      tx,
-      buyOrder.userId,
-      tradingPair.quoteAssetId,
-    );
+    // Buyer: debit locked QUOTE (price * qty already locked at order time)
     await this.walletBalance.debitLocked(tx, {
       walletId: buyerQuoteWallet.id,
       amount: quoteAmount,
@@ -144,12 +215,7 @@ export class TradeSettlementService {
       ...tradeRef,
     });
 
-    // 6b. Buyer: credit available BASE (executedQuantity - buyerFee)
-    const buyerBaseWallet = await this.findWallet(
-      tx,
-      buyOrder.userId,
-      tradingPair.baseAssetId,
-    );
+    // Buyer: credit available BASE (executedQuantity - buyerFee)
     await this.walletBalance.creditAvailable(tx, {
       walletId: buyerBaseWallet.id,
       amount: executedQuantity.minus(buyerFeeAmount),
@@ -158,12 +224,7 @@ export class TradeSettlementService {
       ...tradeRef,
     });
 
-    // 6c. Seller: debit locked BASE (already locked at order time)
-    const sellerBaseWallet = await this.findWallet(
-      tx,
-      sellOrder.userId,
-      tradingPair.baseAssetId,
-    );
+    // Seller: debit locked BASE (already locked at order time)
     await this.walletBalance.debitLocked(tx, {
       walletId: sellerBaseWallet.id,
       amount: executedQuantity,
@@ -171,12 +232,7 @@ export class TradeSettlementService {
       ...tradeRef,
     });
 
-    // 6d. Seller: credit available QUOTE (quoteAmount - sellerFee)
-    const sellerQuoteWallet = await this.findWallet(
-      tx,
-      sellOrder.userId,
-      tradingPair.quoteAssetId,
-    );
+    // Seller: credit available QUOTE (quoteAmount - sellerFee)
     await this.walletBalance.creditAvailable(tx, {
       walletId: sellerQuoteWallet.id,
       amount: quoteAmount.minus(sellerFeeAmount),
@@ -185,12 +241,8 @@ export class TradeSettlementService {
       ...tradeRef,
     });
 
-    // 6e. Fee collection — credit treasury (if fee > 0)
-    if (buyerFeeAmount.greaterThan(0)) {
-      const treasuryBaseWallet = await this.findOrCreateTreasuryWallet(
-        tx,
-        tradingPair.baseAssetId,
-      );
+    // Fee collection — credit treasury (if fee > 0)
+    if (buyerFeeAmount.greaterThan(0) && treasuryBaseWallet) {
       await this.walletBalance.creditAvailable(tx, {
         walletId: treasuryBaseWallet.id,
         amount: buyerFeeAmount,
@@ -200,11 +252,7 @@ export class TradeSettlementService {
       });
     }
 
-    if (sellerFeeAmount.greaterThan(0)) {
-      const treasuryQuoteWallet = await this.findOrCreateTreasuryWallet(
-        tx,
-        tradingPair.quoteAssetId,
-      );
+    if (sellerFeeAmount.greaterThan(0) && treasuryQuoteWallet) {
       await this.walletBalance.creditAvailable(tx, {
         walletId: treasuryQuoteWallet.id,
         amount: sellerFeeAmount,

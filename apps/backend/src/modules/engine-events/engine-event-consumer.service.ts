@@ -207,34 +207,54 @@ export class EngineEventConsumerService
     try {
       const market = typeof payload.market === 'string' ? payload.market : '';
       if (messageType === 'OrderBookChanged') {
-        const bookSequence =
-          typeof payload.bookSequence === 'string'
-            ? payload.bookSequence
-            : typeof payload.bookSequence === 'number'
-              ? String(payload.bookSequence)
-              : '0';
+        const incomingSeq = this.parseBigIntSafe(payload.bookSequence);
+        if (incomingSeq === null) {
+          this.logger.warn(
+            `Malformed bookSequence in OrderBookChanged event for pair ${tradingPairId}: ${String(payload.bookSequence)}`,
+          );
+          return;
+        }
+
+        // Stale snapshot guard: check lightweight integer key instead of pulling full JSON orderbook
+        const cachedSeqStr = await this.redis.get(
+          `${ORDERBOOK_CACHE_PREFIX}seq:${tradingPairId}`,
+        );
+        if (cachedSeqStr !== null) {
+          const cachedSeq = this.parseBigIntSafe(cachedSeqStr);
+          if (cachedSeq !== null && incomingSeq <= cachedSeq) {
+            this.logger.debug(
+              `Skipping stale OrderBookChanged event for ${tradingPairId}: incoming seq ${incomingSeq} <= cached ${cachedSeq}`,
+            );
+            return;
+          }
+        }
+
+        const bookSequenceStr = incomingSeq.toString();
         const orderbookData = {
           symbol: market,
           tradingPairId,
-          bookSequence,
+          bookSequence: bookSequenceStr,
           bids: payload.bids ?? [],
           asks: payload.asks ?? [],
           changedAt: payload.changedAt ?? new Date().toISOString(),
         };
 
         const jsonStr = JSON.stringify(orderbookData);
-        await this.redis.set(
-          `${ORDERBOOK_CACHE_PREFIX}${tradingPairId}`,
-          jsonStr,
+
+        // Redis Pipeline: batch all writes into a single network roundtrip
+        const pipeline = this.redis.pipeline();
+        pipeline.set(
+          `${ORDERBOOK_CACHE_PREFIX}seq:${tradingPairId}`,
+          bookSequenceStr,
         );
+        pipeline.set(`${ORDERBOOK_CACHE_PREFIX}${tradingPairId}`, jsonStr);
         if (market) {
-          await this.redis.set(
+          pipeline.set(
             `${ORDERBOOK_CACHE_PREFIX}${market.toUpperCase()}`,
             jsonStr,
           );
         }
-
-        await this.redis.xadd(
+        pipeline.xadd(
           MARKET_EVENTS_STREAM,
           '*',
           'messageType',
@@ -246,6 +266,8 @@ export class EngineEventConsumerService
           'payload',
           jsonStr,
         );
+
+        await pipeline.exec();
       } else if (messageType === 'TradeCreated') {
         const tradeData = {
           symbol: market,
@@ -358,5 +380,22 @@ export class EngineEventConsumerService
 
   private async ack(msgId: string): Promise<void> {
     await this.redis.xack(ENGINE_EVENTS_STREAM, CONSUMER_GROUP, msgId);
+  }
+
+  private parseBigIntSafe(val: unknown): bigint | null {
+    if (typeof val === 'number' && Number.isSafeInteger(val) && val >= 0) {
+      return BigInt(val);
+    }
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (/^\d+$/.test(trimmed)) {
+        try {
+          return BigInt(trimmed);
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
   }
 }
