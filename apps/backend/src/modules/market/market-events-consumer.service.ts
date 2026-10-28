@@ -84,8 +84,11 @@ export class MarketEventsConsumerService
 
     if (!result) return;
 
+    const ackIds: string[] = [];
+
     for (const [, messages] of result) {
       for (const [msgId, fieldArray] of messages) {
+        ackIds.push(msgId);
         const fields: Record<string, string> = {};
         if (fieldArray) {
           for (let i = 0; i < fieldArray.length; i += 2) {
@@ -110,14 +113,16 @@ export class MarketEventsConsumerService
           }
         } catch (err) {
           this.logger.error(`Error processing market event ${msgId}`, err);
-        } finally {
-          await this.redis.xack(
-            MARKET_EVENTS_STREAM,
-            MARKET_CONSUMER_GROUP,
-            msgId,
-          );
         }
       }
+    }
+
+    if (ackIds.length > 0) {
+      await this.redis.xack(
+        MARKET_EVENTS_STREAM,
+        MARKET_CONSUMER_GROUP,
+        ...ackIds,
+      );
     }
   }
 }

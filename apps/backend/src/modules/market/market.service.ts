@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { Prisma } from '../../generated/prisma';
 import {
   MarketNotFoundException,
   formatDecimal,
@@ -37,40 +38,64 @@ export class MarketService {
       orderBy: { symbol: 'asc' },
     });
 
-    const results = await Promise.all(
-      pairs.map(async (pair) => {
-        // Last price from latest settled trade
-        const lastTrade = await this.prisma.trade.findFirst({
-          where: { tradingPairId: pair.id, settledAt: { not: null } },
-          orderBy: { matchedAt: 'desc' },
-          select: { executionPrice: true },
-        });
+    if (pairs.length === 0) {
+      return [];
+    }
 
-        // Best bid and ask from Redis cache
-        const { bestBid, bestAsk } = await this.getBestBidAsk(pair.symbol);
+    // 1. Single query for latest settled trade per pair (eliminates N+1 SQL queries)
+    const pairIds = pairs.map((p) => p.id);
+    const latestTrades = await this.prisma.trade.findMany({
+      where: {
+        tradingPairId: { in: pairIds },
+        settledAt: { not: null },
+      },
+      distinct: ['tradingPairId'],
+      orderBy: [{ tradingPairId: 'asc' }, { matchedAt: 'desc' }],
+      select: {
+        tradingPairId: true,
+        executionPrice: true,
+      },
+    });
 
-        return {
-          id: pair.id,
-          symbol: pair.symbol,
-          baseAsset: pair.baseAsset.symbol,
-          quoteAsset: pair.quoteAsset.symbol,
-          pricePrecision: pair.pricePrecision,
-          quantityPrecision: pair.quantityPrecision,
-          tickSize: pair.tickSize.toString(),
-          stepSize: pair.stepSize.toString(),
-          minQuantity: pair.minQuantity.toString(),
-          minNotional: pair.minNotional.toString(),
-          makerFeeRate: pair.makerFeeRate.toString(),
-          takerFeeRate: pair.takerFeeRate.toString(),
-          status: pair.status,
-          lastPrice: lastTrade ? lastTrade.executionPrice.toString() : null,
-          bestBid,
-          bestAsk,
-        };
-      }),
+    const lastTradesMap = new Map<string, string>();
+    for (const trade of latestTrades) {
+      lastTradesMap.set(
+        trade.tradingPairId,
+        formatDecimal(trade.executionPrice),
+      );
+    }
+
+    // 2. Single Redis MGET for all cached orderbooks (eliminates N Redis roundtrips)
+    const cacheKeys = pairs.map(
+      (p) => `${ORDERBOOK_CACHE_PREFIX}${p.symbol.toUpperCase()}`,
     );
+    const cachedSnapshots = await this.redis.mget(...cacheKeys);
 
-    return results;
+    // 3. Assemble results in-memory
+    return pairs.map((pair, index) => {
+      const { bestBid, bestAsk } = this.extractBestBidAsk(
+        cachedSnapshots[index],
+      );
+
+      return {
+        id: pair.id,
+        symbol: pair.symbol,
+        baseAsset: pair.baseAsset.symbol,
+        quoteAsset: pair.quoteAsset.symbol,
+        pricePrecision: pair.pricePrecision,
+        quantityPrecision: pair.quantityPrecision,
+        tickSize: formatDecimal(pair.tickSize),
+        stepSize: formatDecimal(pair.stepSize),
+        minQuantity: formatDecimal(pair.minQuantity),
+        minNotional: formatDecimal(pair.minNotional),
+        makerFeeRate: formatDecimal(pair.makerFeeRate),
+        takerFeeRate: formatDecimal(pair.takerFeeRate),
+        status: pair.status,
+        lastPrice: lastTradesMap.get(pair.id) ?? null,
+        bestBid,
+        bestAsk,
+      };
+    });
   }
 
   async getMarketDetail(symbol: string): Promise<MarketDetailResult> {
@@ -189,13 +214,17 @@ export class MarketService {
 
       // Bids: highest price first (descending)
       const sortedBids = [...(cached.bids || [])]
-        .sort((a, b) => Number(b[0]) - Number(a[0]))
+        .sort((a, b) =>
+          new Prisma.Decimal(b[0]).comparedTo(new Prisma.Decimal(a[0])),
+        )
         .slice(0, safeDepth)
         .map((item) => [item[0], item[1]] as [string, string]); // [price, quantity]
 
       // Asks: lowest price first (ascending)
       const sortedAsks = [...(cached.asks || [])]
-        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .sort((a, b) =>
+          new Prisma.Decimal(a[0]).comparedTo(new Prisma.Decimal(b[0])),
+        )
         .slice(0, safeDepth)
         .map((item) => [item[0], item[1]] as [string, string]);
 
@@ -265,15 +294,23 @@ export class MarketService {
       const cachedStr = await this.redis.get(
         `${ORDERBOOK_CACHE_PREFIX}${symbol.toUpperCase()}`,
       );
-      if (!cachedStr) return { bestBid: null, bestAsk: null };
+      return this.extractBestBidAsk(cachedStr);
+    } catch {
+      return { bestBid: null, bestAsk: null };
+    }
+  }
 
+  private extractBestBidAsk(cachedStr: string | null): BestBidAsk {
+    if (!cachedStr) return { bestBid: null, bestAsk: null };
+
+    try {
       const cached = JSON.parse(cachedStr) as unknown as CachedOrderBook;
 
       // Best bid = highest bid
       let bestBid: string | null = null;
       if (cached.bids && cached.bids.length > 0) {
-        const sorted = [...cached.bids].sort(
-          (a, b) => Number(b[0]) - Number(a[0]),
+        const sorted = [...cached.bids].sort((a, b) =>
+          new Prisma.Decimal(b[0]).comparedTo(new Prisma.Decimal(a[0])),
         );
         bestBid = sorted[0]?.[0] ?? null;
       }
@@ -281,8 +318,8 @@ export class MarketService {
       // Best ask = lowest ask
       let bestAsk: string | null = null;
       if (cached.asks && cached.asks.length > 0) {
-        const sorted = [...cached.asks].sort(
-          (a, b) => Number(a[0]) - Number(b[0]),
+        const sorted = [...cached.asks].sort((a, b) =>
+          new Prisma.Decimal(a[0]).comparedTo(new Prisma.Decimal(b[0])),
         );
         bestAsk = sorted[0]?.[0] ?? null;
       }
