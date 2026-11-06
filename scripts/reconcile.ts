@@ -1,58 +1,54 @@
 #!/usr/bin/env tsx
 /**
- * Reconciliation Script — Phase 11
+ * Ledger Reconciliation Script — Phase 11
  *
- * Verifies that the ledger is internally consistent:
- *   1. For each wallet: availableBalance === SUM of AVAILABLE ledger deltas
- *   2. For each wallet: lockedBalance   === SUM of LOCKED   ledger deltas
- *   3. No negative balances
- *   4. Total supply conservation: sum(all users) ≈ sum(initial deposits)
+ * Verifies ledger consistency for every wallet:
+ *   1. DB.availableBalance === SUM of AVAILABLE ledger entry amounts
+ *   2. DB.lockedBalance    === SUM of LOCKED   ledger entry amounts
+ *   3. No negative balances in DB
+ *   4. Supply summary per asset
  *
- * Usage:
+ * Run from apps/backend:
  *   cd apps/backend
  *   npx tsx ../../scripts/reconcile.ts
- *   # or
- *   npx tsx ../../scripts/reconcile.ts --fix   (dry-run only, prints corrections)
  */
 
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
 
-config({ path: resolve(__dirname, '../.env') });
+config({ path: resolve(__dirname, '../../../.env') });
 config({ path: resolve(__dirname, '../../.env') });
 
-import { PrismaClient, LedgerBalanceType } from '../apps/backend/src/generated/prisma';
+import { PrismaClient, LedgerBalanceType } from '../src/generated/prisma';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { Decimal } from 'decimal.js';
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
-
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 
-interface ReconcileResult {
-  walletId: string;
-  userId: string;
-  asset: string;
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
+
+const EPSILON = new Decimal('0.000001');
+
+interface WalletResult {
   userEmail: string;
-  dbAvailable: Decimal;
+  asset: string;
+  dbAvail: Decimal;
   dbLocked: Decimal;
-  ledgerAvailable: Decimal;
+  ledgerAvail: Decimal;
   ledgerLocked: Decimal;
-  availableMatch: boolean;
-  lockedMatch: boolean;
-  hasNegativeBalance: boolean;
+  availOk: boolean;
+  lockedOk: boolean;
+  hasNeg: boolean;
 }
 
 async function reconcile(): Promise<void> {
   console.log('═══════════════════════════════════════════════════════');
-  console.log('  Hau CEX — Ledger Reconciliation Report');
+  console.log('  Hau CEX — Ledger Reconciliation');
   console.log(`  ${new Date().toISOString()}`);
   console.log('═══════════════════════════════════════════════════════\n');
 
-  // Load all wallets with user and asset info
   const wallets = await prisma.wallet.findMany({
     include: {
       user: { select: { email: true } },
@@ -61,96 +57,93 @@ async function reconcile(): Promise<void> {
     orderBy: [{ userId: 'asc' }, { assetId: 'asc' }],
   });
 
-  const results: ReconcileResult[] = [];
-  let totalErrors = 0;
+  const results: WalletResult[] = [];
 
-  for (const wallet of wallets) {
-    // Sum ledger entries for this wallet
-    const availEntries = await prisma.ledgerEntry.aggregate({
-      where: {
-        walletId: wallet.id,
-        balanceType: LedgerBalanceType.AVAILABLE,
-      },
-      _sum: { amount: true },
-    });
+  await Promise.all(
+    wallets.map(async (w) => {
+      const [availAgg, lockedAgg] = await Promise.all([
+        prisma.ledgerEntry.aggregate({
+          where: { walletId: w.id, balanceType: LedgerBalanceType.AVAILABLE },
+          _sum: { amount: true },
+        }),
+        prisma.ledgerEntry.aggregate({
+          where: { walletId: w.id, balanceType: LedgerBalanceType.LOCKED },
+          _sum: { amount: true },
+        }),
+      ]);
 
-    const lockedEntries = await prisma.ledgerEntry.aggregate({
-      where: {
-        walletId: wallet.id,
-        balanceType: LedgerBalanceType.LOCKED,
-      },
-      _sum: { amount: true },
-    });
+      const dbAvail = new Decimal(String(w.availableBalance));
+      const dbLocked = new Decimal(String(w.lockedBalance));
+      const ledgerAvail = new Decimal(String(availAgg._sum.amount ?? '0'));
+      const ledgerLocked = new Decimal(String(lockedAgg._sum.amount ?? '0'));
 
-    const ledgerAvail = new Decimal(String(availEntries._sum.amount ?? '0'));
-    const ledgerLocked = new Decimal(String(lockedEntries._sum.amount ?? '0'));
-    const dbAvail = new Decimal(String(wallet.availableBalance));
-    const dbLocked = new Decimal(String(wallet.lockedBalance));
+      results.push({
+        userEmail: w.user.email,
+        asset: w.asset.symbol,
+        dbAvail,
+        dbLocked,
+        ledgerAvail,
+        ledgerLocked,
+        availOk: dbAvail.minus(ledgerAvail).abs().lte(EPSILON),
+        lockedOk: dbLocked.minus(ledgerLocked).abs().lte(EPSILON),
+        hasNeg: dbAvail.lt(0) || dbLocked.lt(0),
+      });
+    }),
+  );
 
-    const EPSILON = new Decimal('0.000001');
-    const availMatch = dbAvail.minus(ledgerAvail).abs().lte(EPSILON);
-    const lockedMatch = dbLocked.minus(ledgerLocked).abs().lte(EPSILON);
-    const hasNeg = dbAvail.lt(0) || dbLocked.lt(0);
+  // Sort for readability
+  results.sort((a, b) =>
+    a.userEmail.localeCompare(b.userEmail) || a.asset.localeCompare(b.asset),
+  );
 
-    const result: ReconcileResult = {
-      walletId: wallet.id,
-      userId: wallet.userId,
-      asset: wallet.asset.symbol,
-      userEmail: wallet.user.email,
-      dbAvailable: dbAvail,
-      dbLocked: dbLocked,
-      ledgerAvailable: ledgerAvail,
-      ledgerLocked: ledgerLocked,
-      availableMatch: availMatch,
-      lockedMatch: lockedMatch,
-      hasNegativeBalance: hasNeg,
-    };
+  console.log(`Wallets checked: ${results.length}\n`);
 
-    results.push(result);
-    if (!availMatch || !lockedMatch || hasNeg) totalErrors++;
-  }
-
-  // Print report
-  console.log(`Wallets checked: ${results.length}`);
-  console.log('');
-
+  let failures = 0;
   for (const r of results) {
-    const statusAvail = r.availableMatch ? '✅' : '❌';
-    const statusLocked = r.lockedMatch ? '✅' : '❌';
-    const statusNeg = r.hasNegativeBalance ? '⚠️ NEGATIVE' : '';
-
-    if (!r.availableMatch || !r.lockedMatch || r.hasNegativeBalance) {
-      console.log(`  MISMATCH — ${r.userEmail} / ${r.asset}`);
-      console.log(`    DB Available: ${r.dbAvailable}  Ledger Sum: ${r.ledgerAvailable}  ${statusAvail}`);
-      console.log(`    DB Locked:    ${r.dbLocked}  Ledger Sum: ${r.ledgerLocked}  ${statusLocked}`);
-      if (r.hasNegativeBalance) console.log(`    ${statusNeg}`);
+    const ok = r.availOk && r.lockedOk && !r.hasNeg;
+    if (!ok) {
+      failures++;
+      console.log(`  ❌ ${r.userEmail} / ${r.asset}`);
+      if (!r.availOk) {
+        console.log(`     available: DB=${r.dbAvail}  ledger_sum=${r.ledgerAvail}  diff=${r.dbAvail.minus(r.ledgerAvail)}`);
+      }
+      if (!r.lockedOk) {
+        console.log(`     locked:    DB=${r.dbLocked}  ledger_sum=${r.ledgerLocked}  diff=${r.dbLocked.minus(r.ledgerLocked)}`);
+      }
+      if (r.hasNeg) {
+        console.log(`     ⚠️  NEGATIVE BALANCE (avail=${r.dbAvail}, locked=${r.dbLocked})`);
+      }
       console.log('');
     }
   }
 
-  // Supply conservation: sum all users' (available + locked) per asset
-  const assets = await prisma.asset.findMany({ select: { id: true, symbol: true } });
-  console.log('Supply Conservation:');
-  for (const asset of assets) {
-    const total = results
-      .filter((r) => r.asset === asset.symbol)
-      .reduce((acc, r) => acc.plus(r.dbAvailable).plus(r.dbLocked), new Decimal('0'));
-    console.log(`  ${asset.symbol}: total supply = ${total.toFixed(8)}`);
+  if (failures === 0) {
+    console.log('  All wallets match ledger ✅\n');
+  }
+
+  // Supply summary
+  const assetMap = new Map<string, Decimal>();
+  for (const r of results) {
+    assetMap.set(r.asset, (assetMap.get(r.asset) ?? new Decimal(0)).plus(r.dbAvail).plus(r.dbLocked));
+  }
+  console.log('Supply conservation:');
+  for (const [sym, total] of [...assetMap.entries()].sort()) {
+    console.log(`  ${sym.padEnd(6)} = ${total.toFixed(8)}`);
   }
 
   console.log('');
   console.log('═══════════════════════════════════════════════════════');
-  if (totalErrors === 0) {
-    console.log('  ✅ RECONCILIATION PASSED — All balances match ledger');
+  if (failures === 0) {
+    console.log('  ✅ PASSED — all balances consistent');
   } else {
-    console.log(`  ❌ RECONCILIATION FAILED — ${totalErrors} wallet(s) have discrepancies`);
+    console.log(`  ❌ FAILED — ${failures} wallet(s) have discrepancies`);
     process.exitCode = 1;
   }
   console.log('═══════════════════════════════════════════════════════\n');
 }
 
 reconcile()
-  .catch((err) => {
+  .catch((err: unknown) => {
     console.error('Fatal error:', err);
     process.exitCode = 1;
   })
