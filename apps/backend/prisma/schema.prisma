@@ -86,6 +86,17 @@ enum OutboxStatus {
   @@map("outbox_status")
 }
 
+enum DepositStatus {
+  PENDING
+  DETECTED
+  CONFIRMING
+  CREDITED
+  EXPIRED
+  FAILED
+
+  @@map("deposit_status")
+}
+
 // Models
 
 model User {
@@ -105,6 +116,7 @@ model User {
   wallets       Wallet[]
   ledgerEntries LedgerEntry[]
   orders        Order[]
+  deposits      Deposit[]
   buyerTrades   Trade[]       @relation("BuyerUser")
   sellerTrades  Trade[]       @relation("SellerUser")
 
@@ -142,6 +154,7 @@ model Asset {
   wallets           Wallet[]
   ledgerEntries     LedgerEntry[]
   lockedOrders      Order[]       @relation("LockedAsset")
+  deposits          Deposit[]
 
   @@map("assets")
 }
@@ -349,4 +362,37 @@ model ProcessedEvent {
   @@unique([consumerName, messageId], map: "uq_processed_events_consumer_message")
   @@index([messageId], map: "idx_processed_events_message_id")
   @@map("processed_events")
+}
+
+// ─── Deposit ──────────────────────────────────────────────────────────────────
+
+model Deposit {
+  id                String        @id(map: "pk_deposits") @default(uuid(7)) @db.Uuid
+  userId            String        @map("user_id") @db.Uuid
+  assetId           String        @map("asset_id") @db.Uuid
+  accountReference  String        @unique(map: "uq_deposits_account_reference") @map("account_reference") @db.VarChar(66)
+  depositorAddress  String        @map("depositor_address") @db.VarChar(42)
+  tokenAddress      String        @map("token_address") @db.VarChar(42)
+  chainId           BigInt        @map("chain_id") @db.BigInt
+  txHash            String?       @map("tx_hash") @db.VarChar(66)
+  logIndex          Int?          @map("log_index")
+  blockNumber       BigInt?       @map("block_number") @db.BigInt
+  blockHash         String?       @map("block_hash") @db.VarChar(66)
+  amountRaw         Decimal?      @map("amount_raw") @db.Decimal(78, 0)
+  amount            Decimal?      @db.Decimal(38, 18)
+  status            DepositStatus @default(PENDING)
+  confirmationCount Int           @default(0) @map("confirmation_count")
+  expiresAt         DateTime      @map("expires_at") @db.Timestamptz(6)
+  detectedAt        DateTime?     @map("detected_at") @db.Timestamptz(6)
+  creditedAt        DateTime?     @map("credited_at") @db.Timestamptz(6)
+  failureReason     String?       @map("failure_reason")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict, map: "fk_deposits_user")
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict, map: "fk_deposits_asset")
+
+  @@index([userId, createdAt(sort: Desc)], map: "idx_deposits_user_created")
+  @@index([status, expiresAt], map: "idx_deposits_status_expires")
+  @@map("deposits")
 }

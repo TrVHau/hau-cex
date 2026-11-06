@@ -10,6 +10,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { MarketModule } from './modules/market/market.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { DepositsModule } from './modules/deposits/deposits.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { AdminModule } from './modules/admin/admin.module';
     OrdersModule,
     MarketModule,
     AdminModule,
+    DepositsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
