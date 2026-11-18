@@ -194,6 +194,9 @@ importers:
       decimal.js:
         specifier: ^10.6.0
         version: 10.6.0
+      lucide-react:
+        specifier: ^1.73.0
+        version: 1.73.0(@types/react@19.2.17)(react@19.2.8)
       react:
         specifier: ^19.2.7
         version: 19.2.8
@@ -4131,6 +4134,15 @@ packages:
     resolution: {integrity: sha512-DqC6n3QQ77zdFpCMASA1a3Jlb64Hv2N2DciFGkO/4L9+q/IpIAuRlKOvCXabtRW6cQf8usbmM6BE/TOPysCdIA==}
     engines: {bun: '>=1.0.0', deno: '>=1.30.0', node: '>=8.0.0'}
 
+  lucide-react@1.73.0:
+    resolution: {integrity: sha512-fVOzGviL9mTfHenG1PbCfIceavyGlnpYNSYr+aGZHLRymAJ7DTP6KHuqt0uBkCKAoenr1UVkwSbDIYt2xIesEQ==}
+    peerDependencies:
+      '@types/react': '*'
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+
   magic-string@0.30.17:
     resolution: {integrity: sha512-sNPKHvyjVf7gyjwS4xGTaW/mCnF8wnjtifKBEhxfZ7E/S8tQ0rssrwGNn6q8JH/ohItJfSQp9mBtQYuTlH5QnA==}
 
@@ -6355,7 +6367,7 @@ snapshots:
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
       '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/remapping@2.3.5':
@@ -6377,7 +6389,7 @@ snapshots:
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   '@jridgewell/trace-mapping@0.3.9':
     dependencies:
@@ -9994,6 +10006,12 @@ snapshots:
 
   lru.min@1.1.4: {}
 
+  lucide-react@1.73.0(@types/react@19.2.17)(react@19.2.8):
+    dependencies:
+      react: 19.2.8
+    optionalDependencies:
+      '@types/react': 19.2.17
+
   magic-string@0.30.17:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -11295,7 +11313,7 @@ snapshots:
       acorn-import-phases: 1.0.4(acorn@8.17.0)
       browserslist: 4.28.7
       chrome-trace-event: 1.0.4
-      enhanced-resolve: 5.24.3
+      enhanced-resolve: 5.27.0
       es-module-lexer: 2.3.1
       eslint-scope: 5.1.1
       events: 3.3.0

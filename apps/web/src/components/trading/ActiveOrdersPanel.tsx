@@ -1,36 +1,23 @@
+import { useState } from 'react';
 import { useActiveOrders, useCancelOrder } from '../../hooks/useApi';
-import { Card, Badge, Button, Spinner } from '../ui';
+import { Button, Spinner } from '../ui';
 import { formatPrice, formatQty, formatDateTime, parseApiError } from '../../lib/utils';
 import type { Order } from '../../types';
-import { useState } from 'react';
-
-function statusBadge(status: Order['status']) {
-  switch (status) {
-    case 'OPEN':
-    case 'PARTIALLY_FILLED':
-      return <Badge variant="blue">{status.replace('_', ' ')}</Badge>;
-    case 'FILLED':
-      return <Badge variant="green">FILLED</Badge>;
-    case 'CANCELLED':
-    case 'REJECTED':
-      return <Badge variant="red">{status}</Badge>;
-    default:
-      return <Badge>{status}</Badge>;
-  }
-}
+import Decimal from 'decimal.js';
 
 interface Props {
-  symbol?: string; // filter by symbol nếu cần
+  currentSymbol?: string;
   tickSize: string;
   basePrecision: number;
 }
 
-export function ActiveOrdersPanel({ symbol, tickSize, basePrecision }: Props) {
-  const { data: orders, isLoading } = useActiveOrders();
-  const cancelOrder = useCancelOrder();
+export function ActiveOrdersPanel({ currentSymbol, tickSize, basePrecision }: Props) {
+  const [activeTab, setActiveTab] = useState<'OPEN' | 'HISTORY' | 'TRADES' | 'FUNDS'>('OPEN');
+  const [hideOtherPairs, setHideOtherPairs] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
-  const filtered = symbol ? orders?.filter((o) => o.symbol === symbol) : orders;
+  const { data: orders = [], isLoading } = useActiveOrders();
+  const cancelOrder = useCancelOrder();
 
   const handleCancel = async (orderId: string) => {
     setCancelError(null);
@@ -41,79 +28,167 @@ export function ActiveOrdersPanel({ symbol, tickSize, basePrecision }: Props) {
     }
   };
 
-  return (
-    <Card title="Active Orders" className="h-full">
-      {cancelError && (
-        <div className="text-red-400 text-xs mb-2 px-1">{cancelError}</div>
-      )}
+  const filteredOrders = orders.filter((o) => {
+    if (hideOtherPairs && currentSymbol) {
+      return o.symbol === currentSymbol;
+    }
+    return true;
+  });
 
-      {isLoading && (
-        <div className="flex justify-center py-6">
-          <Spinner />
+  return (
+    <div className="bg-[#14171d] border border-[#232933] rounded-xl overflow-hidden flex flex-col">
+      {/* Tabs & Controls */}
+      <div className="px-4 py-2.5 border-b border-[#232933] flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-5 text-xs font-semibold">
+          <button
+            onClick={() => setActiveTab('OPEN')}
+            className={`pb-1 transition-colors cursor-pointer ${
+              activeTab === 'OPEN'
+                ? 'text-[#f5b642] border-b-2 border-[#f5b642]'
+                : 'text-[#848e9c] hover:text-[#eaecef]'
+            }`}
+          >
+            Open Orders ({orders.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('HISTORY')}
+            className={`pb-1 transition-colors cursor-pointer ${
+              activeTab === 'HISTORY'
+                ? 'text-[#f5b642] border-b-2 border-[#f5b642]'
+                : 'text-[#848e9c] hover:text-[#eaecef]'
+            }`}
+          >
+            Order History
+          </button>
+          <button
+            onClick={() => setActiveTab('TRADES')}
+            className={`pb-1 transition-colors cursor-pointer ${
+              activeTab === 'TRADES'
+                ? 'text-[#f5b642] border-b-2 border-[#f5b642]'
+                : 'text-[#848e9c] hover:text-[#eaecef]'
+            }`}
+          >
+            Trade History
+          </button>
+          <button
+            onClick={() => setActiveTab('FUNDS')}
+            className={`pb-1 transition-colors cursor-pointer ${
+              activeTab === 'FUNDS'
+                ? 'text-[#f5b642] border-b-2 border-[#f5b642]'
+                : 'text-[#848e9c] hover:text-[#eaecef]'
+            }`}
+          >
+            Funds
+          </button>
+        </div>
+
+        <div className="flex items-center gap-4 text-xs">
+          <label className="flex items-center gap-1.5 text-[#848e9c] hover:text-[#eaecef] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hideOtherPairs}
+              onChange={(e) => setHideOtherPairs(e.target.checked)}
+              className="accent-[#f5b642] rounded"
+            />
+            <span>HIDE OTHER PAIRS</span>
+          </label>
+        </div>
+      </div>
+
+      {cancelError && (
+        <div className="p-2 bg-[#f6465d]/10 text-[#f6465d] text-xs px-4 border-b border-[#f6465d]/20">
+          {cancelError}
         </div>
       )}
 
-      {!isLoading && (!filtered || filtered.length === 0) && (
-        <div className="text-gray-500 text-center py-6 text-sm">Không có lệnh đang mở</div>
-      )}
-
-      {filtered && filtered.length > 0 && (
-        <div className="overflow-x-auto">
+      {/* Table Content */}
+      <div className="overflow-x-auto min-h-[140px]">
+        {isLoading ? (
+          <div className="p-8 flex justify-center">
+            <Spinner />
+          </div>
+        ) : filteredOrders.length === 0 ? (
+          <div className="p-8 text-center text-[#5e6673] text-xs">
+            No open orders.
+          </div>
+        ) : (
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-gray-400 border-b border-gray-700">
-                <th className="text-left pb-2 font-medium">Pair</th>
-                <th className="text-left pb-2 font-medium">Side</th>
-                <th className="text-right pb-2 font-medium">Price</th>
-                <th className="text-right pb-2 font-medium">Qty</th>
-                <th className="text-right pb-2 font-medium">Filled</th>
-                <th className="text-right pb-2 font-medium">Status</th>
-                <th className="text-right pb-2 font-medium">Time</th>
-                <th className="text-right pb-2 font-medium">Action</th>
+              <tr className="text-[#848e9c] border-b border-[#1c212a] text-left">
+                <th className="py-2.5 px-4 font-medium">DATE</th>
+                <th className="py-2.5 px-4 font-medium">PAIR</th>
+                <th className="py-2.5 px-4 font-medium">TYPE</th>
+                <th className="py-2.5 px-4 font-medium">SIDE</th>
+                <th className="py-2.5 px-4 font-medium text-right">PRICE</th>
+                <th className="py-2.5 px-4 font-medium text-right">AMOUNT</th>
+                <th className="py-2.5 px-4 font-medium text-right">FILLED</th>
+                <th className="py-2.5 px-4 font-medium text-right">TOTAL</th>
+                <th className="py-2.5 px-4 font-medium text-right">ACTION</th>
               </tr>
             </thead>
-            <tbody>
-              {filtered.map((order) => (
-                <tr key={order.id} className="border-b border-gray-700/40 hover:bg-gray-700/20">
-                  <td className="py-2 text-gray-200">{order.symbol}</td>
-                  <td className="py-2">
-                    <span
-                      className={order.side === 'BUY' ? 'text-green-400' : 'text-red-400'}
-                    >
-                      {order.side}
-                    </span>
-                  </td>
-                  <td className="py-2 text-right font-mono text-gray-200">
-                    {formatPrice(order.price, tickSize)}
-                  </td>
-                  <td className="py-2 text-right font-mono text-gray-200">
-                    {formatQty(order.quantity, basePrecision)}
-                  </td>
-                  <td className="py-2 text-right font-mono text-gray-400">
-                    {formatQty(order.filledQty, basePrecision)}
-                  </td>
-                  <td className="py-2 text-right">{statusBadge(order.status)}</td>
-                  <td className="py-2 text-right text-gray-500">
-                    {formatDateTime(order.createdAt)}
-                  </td>
-                  <td className="py-2 text-right">
-                    {(order.status === 'OPEN' || order.status === 'PARTIALLY_FILLED') && (
+            <tbody className="divide-y divide-[#1c212a] font-numeric">
+              {filteredOrders.map((o: Order) => {
+                const isBuy = o.side === 'BUY';
+                let total = '0.00';
+                let filledPct = '0%';
+                try {
+                  total = new Decimal(o.price).mul(new Decimal(o.quantity)).toFixed(2);
+                  filledPct = new Decimal(o.filledQty)
+                    .div(new Decimal(o.quantity))
+                    .mul(100)
+                    .toFixed(0) + '%';
+                } catch {
+                  // ignore
+                }
+
+                return (
+                  <tr key={o.id} className="hover:bg-[#1a1e26] transition-colors">
+                    <td className="py-2.5 px-4 text-[#848e9c]">
+                      {formatDateTime(o.createdAt).split(' ')[1] ?? formatDateTime(o.createdAt)}
+                    </td>
+                    <td className="py-2.5 px-4 font-bold text-white font-sans">{o.symbol}</td>
+                    <td className="py-2.5 px-4 text-[#eaecef] font-sans">{o.type}</td>
+                    <td className="py-2.5 px-4 font-bold font-sans">
+                      <span className={isBuy ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
+                        {o.side}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4 text-right text-white">
+                      {formatPrice(o.price, tickSize)}
+                    </td>
+                    <td className="py-2.5 px-4 text-right text-white">
+                      {formatQty(o.quantity, basePrecision)}
+                    </td>
+                    <td className="py-2.5 px-4 text-right text-[#848e9c]">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <div className="w-12 h-1.5 rounded-full bg-[#1e232d] overflow-hidden">
+                          <div
+                            className="h-full bg-[#f5b642] rounded-full"
+                            style={{ width: filledPct }}
+                          />
+                        </div>
+                        <span>{filledPct}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-4 text-right font-medium text-white">{total}</td>
+                    <td className="py-2.5 px-4 text-right font-sans">
                       <Button
-                        variant="danger"
-                        size="sm"
-                        onClick={() => { void handleCancel(order.id); }}
-                        isLoading={cancelOrder.isPending && cancelOrder.variables === order.id}
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => { void handleCancel(o.id); }}
+                        isLoading={cancelOrder.isPending && cancelOrder.variables === o.id}
+                        className="text-[#f6465d] hover:text-[#f6465d] hover:bg-[#f6465d]/10 px-2"
                       >
                         Cancel
                       </Button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </div>
-      )}
-    </Card>
+        )}
+      </div>
+    </div>
   );
 }

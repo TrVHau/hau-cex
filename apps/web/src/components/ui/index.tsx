@@ -1,66 +1,78 @@
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 
+// ─── Card ──────────────────────────────────────────────────────────────────
 interface CardProps {
   children: ReactNode;
   className?: string;
-  title?: string;
+  title?: string | ReactNode;
+  action?: ReactNode;
+  noPadding?: boolean;
 }
 
-export function Card({ children, className = '', title }: CardProps) {
+export function Card({ children, className = '', title, action, noPadding = false }: CardProps) {
   return (
-    <div className={`bg-gray-800 border border-gray-700 rounded-lg ${className}`}>
+    <div className={`bg-[#14171d] border border-[#232933] rounded-xl overflow-hidden ${className}`}>
       {title && (
-        <div className="px-4 py-2 border-b border-gray-700">
-          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">{title}</h3>
+        <div className="px-5 py-3.5 border-b border-[#232933] flex items-center justify-between">
+          <div className="text-sm font-semibold text-[#eaecef]">{title}</div>
+          {action && <div>{action}</div>}
         </div>
       )}
-      <div className="p-4">{children}</div>
+      <div className={noPadding ? '' : 'p-5'}>{children}</div>
     </div>
   );
 }
 
+// ─── Badge ─────────────────────────────────────────────────────────────────
 interface BadgeProps {
   children: ReactNode;
-  variant?: 'green' | 'red' | 'yellow' | 'gray' | 'blue';
+  variant?: 'green' | 'red' | 'yellow' | 'gray' | 'blue' | 'purple';
+  size?: 'sm' | 'md';
   className?: string;
 }
 
-const badgeColors: Record<NonNullable<BadgeProps['variant']>, string> = {
-  green: 'bg-green-900/50 text-green-400 border border-green-700',
-  red: 'bg-red-900/50 text-red-400 border border-red-700',
-  yellow: 'bg-yellow-900/50 text-yellow-400 border border-yellow-700',
-  gray: 'bg-gray-700 text-gray-300 border border-gray-600',
-  blue: 'bg-blue-900/50 text-blue-400 border border-blue-700',
+const badgeVariants = {
+  green: 'bg-[#0ecb81]/15 text-[#0ecb81] border-[#0ecb81]/30',
+  red: 'bg-[#f6465d]/15 text-[#f6465d] border-[#f6465d]/30',
+  yellow: 'bg-[#f5b642]/15 text-[#f5b642] border-[#f5b642]/30',
+  gray: 'bg-[#848e9c]/15 text-[#848e9c] border-[#848e9c]/30',
+  blue: 'bg-[#3b82f6]/15 text-[#60a5fa] border-[#3b82f6]/30',
+  purple: 'bg-[#8b5cf6]/15 text-[#a78bfa] border-[#8b5cf6]/30',
 };
 
-export function Badge({ children, variant = 'gray', className = '' }: BadgeProps) {
+export function Badge({ children, variant = 'gray', size = 'sm', className = '' }: BadgeProps) {
+  const sizeClasses = size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-xs';
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badgeColors[variant]} ${className}`}
+      className={`inline-flex items-center gap-1 font-medium rounded border ${badgeVariants[variant]} ${sizeClasses} ${className}`}
     >
       {children}
     </span>
   );
 }
 
+// ─── Button ────────────────────────────────────────────────────────────────
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'danger' | 'ghost' | 'buy' | 'sell';
-  size?: 'sm' | 'md' | 'lg';
+  variant?: 'primary' | 'secondary' | 'buy' | 'sell' | 'outline' | 'ghost' | 'danger';
+  size?: 'xs' | 'sm' | 'md' | 'lg';
   isLoading?: boolean;
 }
 
-const btnVariants: Record<NonNullable<ButtonProps['variant']>, string> = {
-  primary: 'bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-900',
-  danger: 'bg-red-600 hover:bg-red-700 text-white disabled:bg-red-900',
-  ghost: 'bg-transparent hover:bg-gray-700 text-gray-300 border border-gray-600',
-  buy: 'bg-green-600 hover:bg-green-700 text-white disabled:bg-green-900',
-  sell: 'bg-red-600 hover:bg-red-700 text-white disabled:bg-red-900',
+const btnVariants = {
+  primary: 'bg-[#f5b642] hover:bg-[#e5a835] text-black font-semibold',
+  secondary: 'bg-[#1e232d] hover:bg-[#282f3c] text-[#eaecef] border border-[#2b3240]',
+  buy: 'bg-[#0ecb81] hover:bg-[#0bb371] text-white font-semibold',
+  sell: 'bg-[#f6465d] hover:bg-[#df3b51] text-white font-semibold',
+  outline: 'border border-[#2b3240] hover:border-[#f5b642] text-[#eaecef] hover:text-[#f5b642] bg-transparent',
+  ghost: 'bg-transparent hover:bg-[#1e232d] text-[#848e9c] hover:text-[#eaecef]',
+  danger: 'bg-[#f6465d]/20 hover:bg-[#f6465d]/30 text-[#f6465d] border border-[#f6465d]/40',
 };
 
-const btnSizes: Record<NonNullable<ButtonProps['size']>, string> = {
-  sm: 'px-2 py-1 text-xs',
-  md: 'px-4 py-2 text-sm',
-  lg: 'px-6 py-3 text-base',
+const btnSizes = {
+  xs: 'px-2 py-1 text-xs rounded',
+  sm: 'px-3 py-1.5 text-xs rounded-md',
+  md: 'px-4 py-2 text-sm rounded-lg',
+  lg: 'px-5 py-2.5 text-base rounded-lg',
 };
 
 export function Button({
@@ -76,13 +88,13 @@ export function Button({
     <button
       {...props}
       disabled={disabled ?? isLoading}
-      className={`rounded font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${btnVariants[variant]} ${btnSizes[size]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${btnVariants[variant]} ${btnSizes[size]} ${className}`}
     >
       {isLoading ? (
-        <span className="flex items-center gap-2">
-          <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          {children}
-        </span>
+        <>
+          <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          <span>{children}</span>
+        </>
       ) : (
         children
       )}
@@ -90,32 +102,77 @@ export function Button({
   );
 }
 
+// ─── Input ─────────────────────────────────────────────────────────────────
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
-  suffix?: string;
+  suffix?: ReactNode;
+  prefixIcon?: ReactNode;
 }
 
-export function Input({ label, error, suffix, className = '', ...props }: InputProps) {
+export function Input({
+  label,
+  error,
+  suffix,
+  prefixIcon,
+  className = '',
+  ...props
+}: InputProps) {
   return (
-    <div className="flex flex-col gap-1">
-      {label && <label className="text-xs text-gray-400">{label}</label>}
-      <div className="relative">
+    <div className="flex flex-col gap-1.5 w-full">
+      {label && <label className="text-xs font-medium text-[#848e9c]">{label}</label>}
+      <div className="relative flex items-center">
+        {prefixIcon && (
+          <div className="absolute left-3 text-[#5e6673] pointer-events-none">
+            {prefixIcon}
+          </div>
+        )}
         <input
           {...props}
-          className={`w-full bg-gray-700 border ${error ? 'border-red-500' : 'border-gray-600'} rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 ${suffix ? 'pr-16' : ''} ${className}`}
+          className={`w-full bg-[#1b2028] border ${
+            error ? 'border-[#f6465d]' : 'border-[#282f3c] focus:border-[#f5b642]'
+          } rounded-lg py-2 text-sm text-[#eaecef] placeholder-[#5e6673] outline-none transition-colors ${
+            prefixIcon ? 'pl-9' : 'pl-3'
+          } ${suffix ? 'pr-14' : 'pr-3'} ${className}`}
         />
         {suffix && (
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
+          <div className="absolute right-3 text-xs text-[#848e9c] font-medium pointer-events-none">
             {suffix}
-          </span>
+          </div>
         )}
       </div>
-      {error && <span className="text-xs text-red-400">{error}</span>}
+      {error && <span className="text-xs text-[#f6465d]">{error}</span>}
     </div>
   );
 }
 
+// ─── StatCard ──────────────────────────────────────────────────────────────
+interface StatCardProps {
+  title: string;
+  value: string | ReactNode;
+  subtitle?: string | ReactNode;
+  badge?: ReactNode;
+  icon?: ReactNode;
+  className?: string;
+}
+
+export function StatCard({ title, value, subtitle, badge, icon, className = '' }: StatCardProps) {
+  return (
+    <div className={`bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between ${className}`}>
+      <div className="flex items-center justify-between text-xs text-[#848e9c] mb-2">
+        <span className="font-medium flex items-center gap-1.5">
+          {icon && <span className="text-[#f5b642]">{icon}</span>}
+          {title}
+        </span>
+        {badge}
+      </div>
+      <div className="text-xl sm:text-2xl font-bold text-[#eaecef] font-numeric tracking-tight">{value}</div>
+      {subtitle && <div className="text-xs text-[#848e9c] mt-1.5 flex items-center gap-1.5">{subtitle}</div>}
+    </div>
+  );
+}
+
+// ─── Alert ─────────────────────────────────────────────────────────────────
 interface AlertProps {
   type: 'error' | 'success' | 'warning' | 'info';
   message: string;
@@ -123,19 +180,19 @@ interface AlertProps {
   className?: string;
 }
 
-const alertColors: Record<AlertProps['type'], string> = {
-  error: 'bg-red-900/40 border-red-700 text-red-300',
-  success: 'bg-green-900/40 border-green-700 text-green-300',
-  warning: 'bg-yellow-900/40 border-yellow-700 text-yellow-300',
-  info: 'bg-blue-900/40 border-blue-700 text-blue-300',
+const alertVariants = {
+  error: 'bg-[#f6465d]/10 border-[#f6465d]/30 text-[#f6465d]',
+  success: 'bg-[#0ecb81]/10 border-[#0ecb81]/30 text-[#0ecb81]',
+  warning: 'bg-[#f5b642]/10 border-[#f5b642]/30 text-[#f5b642]',
+  info: 'bg-[#3b82f6]/10 border-[#3b82f6]/30 text-[#60a5fa]',
 };
 
 export function Alert({ type, message, onClose, className = '' }: AlertProps) {
   return (
-    <div className={`border rounded px-4 py-3 text-sm flex items-center justify-between ${alertColors[type]} ${className}`}>
+    <div className={`border rounded-lg px-4 py-3 text-sm flex items-center justify-between ${alertVariants[type]} ${className}`}>
       <span>{message}</span>
       {onClose && (
-        <button onClick={onClose} className="ml-4 opacity-70 hover:opacity-100">
+        <button onClick={onClose} className="ml-4 opacity-70 hover:opacity-100 cursor-pointer">
           ✕
         </button>
       )}
@@ -143,18 +200,19 @@ export function Alert({ type, message, onClose, className = '' }: AlertProps) {
   );
 }
 
+// ─── Spinner ───────────────────────────────────────────────────────────────
 export function Spinner({ className = '' }: { className?: string }) {
   return (
     <div
-      className={`inline-block border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin ${className}`}
-      style={{ width: 20, height: 20 }}
+      className={`inline-block border-2 border-[#232933] border-t-[#f5b642] rounded-full animate-spin ${className}`}
+      style={{ width: 24, height: 24 }}
     />
   );
 }
 
 export function LoadingPage() {
   return (
-    <div className="flex items-center justify-center h-screen bg-gray-900">
+    <div className="flex items-center justify-center min-h-[60vh]">
       <Spinner className="w-8 h-8" />
     </div>
   );

@@ -1,6 +1,7 @@
 import { useRecentTrades } from '../../hooks/useApi';
-import { Card, Spinner } from '../ui';
+import { Spinner } from '../ui';
 import { formatPrice, formatQty, formatTime } from '../../lib/utils';
+import type { Trade } from '../../types';
 
 interface Props {
   symbol: string;
@@ -9,46 +10,58 @@ interface Props {
 }
 
 export function RecentTradesPanel({ symbol, tickSize, basePrecision }: Props) {
-  const { data: trades, isLoading } = useRecentTrades(symbol);
+  const { data: trades = [], isLoading } = useRecentTrades(symbol);
 
   if (isLoading) {
     return (
-      <Card title="Recent Trades" className="h-full">
-        <div className="flex justify-center py-8">
-          <Spinner />
-        </div>
-      </Card>
+      <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-center items-center min-h-[220px]">
+        <Spinner />
+      </div>
     );
   }
 
   return (
-    <Card title="Recent Trades" className="h-full">
-      <div className="text-xs text-gray-400 flex justify-between mb-1 px-1">
-        <span>Price</span>
-        <span>Qty</span>
-        <span className="hidden sm:block">Time</span>
+    <div className="bg-[#14171d] border border-[#232933] rounded-xl p-3 flex flex-col text-xs font-numeric select-none">
+      <div className="flex items-center justify-between font-sans text-xs font-bold text-white mb-2 px-1">
+        <span>MARKET TRADES</span>
+        <span className="text-[10px] text-[#5e6673]">Recent executions</span>
       </div>
-      <div className="space-y-0 overflow-y-auto max-h-96">
-        {(!trades || trades.length === 0) && (
-          <div className="text-gray-500 text-center py-8 text-sm">Chưa có giao dịch</div>
-        )}
-        {trades?.map((trade) => (
-          <div
-            key={trade.id}
-            className="flex justify-between text-xs py-0.5 px-1 hover:bg-gray-700/30"
-          >
-            <span
-              className={`font-mono ${trade.side === 'BUY' ? 'text-green-400' : 'text-red-400'}`}
-            >
-              {formatPrice(trade.price, tickSize)}
-            </span>
-            <span className="font-mono text-gray-300">
-              {formatQty(trade.quantity, basePrecision)}
-            </span>
-            <span className="text-gray-500 hidden sm:block">{formatTime(trade.createdAt)}</span>
+
+      {/* Header */}
+      <div className="grid grid-cols-3 text-[10px] text-[#5e6673] px-1 py-1 border-b border-[#1c212a] uppercase font-sans">
+        <span>PRICE (USDT)</span>
+        <span className="text-right">AMOUNT</span>
+        <span className="text-right">TIME</span>
+      </div>
+
+      {/* Trade Rows */}
+      <div className="space-y-0.5 py-1 overflow-y-auto max-h-[240px]">
+        {trades.length === 0 ? (
+          <div className="py-8 text-center text-[#5e6673] text-[11px] font-sans">
+            No trades executed yet.
           </div>
-        ))}
+        ) : (
+          trades.slice(0, 25).map((t: Trade) => {
+            const isBuy = t.side === 'BUY';
+            return (
+              <div
+                key={t.id}
+                className="grid grid-cols-3 px-1 py-0.5 hover:bg-[#1e232d] transition-colors rounded-sm cursor-pointer"
+              >
+                <span className={`font-semibold ${isBuy ? 'text-[#0ecb81]' : 'text-[#f6465d]'}`}>
+                  {formatPrice(t.price, tickSize)}
+                </span>
+                <span className="text-right text-[#eaecef]">
+                  {formatQty(t.quantity, basePrecision)}
+                </span>
+                <span className="text-right text-[#848e9c] text-[11px]">
+                  {formatTime(t.createdAt)}
+                </span>
+              </div>
+            );
+          })
+        )}
       </div>
-    </Card>
+    </div>
   );
 }
