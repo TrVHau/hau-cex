@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { WalletMutationParams, CreditParams, WalletRawRow } from './types';
+import {
+  WalletMutationParams,
+  CreditParams,
+  DebitLockedParams,
+  WalletRawRow,
+} from './types';
 import {
   LedgerEntryType,
   Prisma,
@@ -142,7 +147,8 @@ export class WalletBalanceService {
   }
 
   // debit locked (trừ tiền khi rút tiền hoặc khớp lệnh)
-  async debitLocked(tx: PrismaTx, p: WalletMutationParams): Promise<Wallet> {
+  // BUG-08 fix: accept DebitLockedParams so callers can override entryType
+  async debitLocked(tx: PrismaTx, p: DebitLockedParams): Promise<Wallet> {
     this.validateAmount(p.amount);
     const { walletRow, locked } = await this.lockWallet(tx, p.walletId);
 
@@ -162,7 +168,7 @@ export class WalletBalanceService {
         walletRow,
         p,
         LedgerBalanceType.LOCKED,
-        LedgerEntryType.TRADE_SETTLEMENT,
+        p.entryType ?? LedgerEntryType.TRADE_SETTLEMENT,
         p.amount.negated(),
         locked,
         locked.minus(p.amount),

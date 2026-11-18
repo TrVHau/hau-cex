@@ -53,7 +53,10 @@ export class EngineEventConsumerService
         'CREATE',
         ENGINE_EVENTS_STREAM,
         CONSUMER_GROUP,
-        '$',
+        // BUG-05 fix: use '0' so all existing messages are processed when the
+        // group is first created (e.g. after a Redis flush). The processedEvent
+        // idempotency guard prevents double-processing on replay.
+        '0',
         'MKSTREAM',
       );
     } catch (error) {

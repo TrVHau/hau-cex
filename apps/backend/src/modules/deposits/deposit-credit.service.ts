@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { Prisma } from '../../generated/prisma';
 import { v7 as uuidv7 } from 'uuid';
+import { MARKET_EVENTS_STREAM } from '../../common';
 
 const CONSUMER_NAME = 'deposit-credit-v1';
 
@@ -104,7 +105,8 @@ export class DepositCreditService {
             afterBalance,
             referenceType: 'DEPOSIT',
             referenceId: depositId,
-            operationId: depositId,
+            // BUG-01 fix: use messageId (unique per credit attempt) not depositId
+            operationId: messageId,
           },
         });
 
@@ -115,13 +117,15 @@ export class DepositCreditService {
           WHERE id = ${depositId}::uuid
         `;
 
-        // 8. Outbox DepositUpdated event
+        // 8. Outbox DepositUpdated event → published to MARKET_EVENTS_STREAM
+        // so MarketEventsConsumerService can forward it via WebSocket to the user.
+        // BUG-03 fix: use constant instead of hardcoded string to match actual consumer
         await tx.outboxEvent.create({
           data: {
             messageId: uuidv7(),
             version: 1,
             correlationId: depositId,
-            streamName: 'stream:market:events',
+            streamName: MARKET_EVENTS_STREAM,
             messageType: 'DepositUpdated',
             partitionKey: dep.user_id,
             occurredAt: new Date(),

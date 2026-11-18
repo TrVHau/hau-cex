@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OrderStatus, Prisma } from '../../generated/prisma';
 import { WalletBalanceService } from '../wallets/wallet-balance.service';
 import { TradeCreatedPayload } from './types';
@@ -7,10 +7,28 @@ import { LedgerEntryType } from '../../generated/prisma';
 import { v7 as uuidv7 } from 'uuid';
 
 @Injectable()
-export class TradeSettlementService {
+export class TradeSettlementService implements OnModuleInit {
   private readonly logger = new Logger(TradeSettlementService.name);
+  private readonly treasuryUserId: string;
 
-  constructor(private readonly walletBalance: WalletBalanceService) {}
+  constructor(private readonly walletBalance: WalletBalanceService) {
+    // BUG-06 fix: validate TREASURY_USER_ID at construction time so the app
+    // fails fast on startup instead of crashing only when the first trade occurs.
+    const id = process.env['TREASURY_USER_ID'];
+    if (!id) {
+      throw new Error(
+        'TREASURY_USER_ID environment variable is not set. ' +
+          'Set it in .env before starting the application.',
+      );
+    }
+    this.treasuryUserId = id;
+  }
+
+  onModuleInit(): void {
+    this.logger.log(
+      `TradeSettlementService ready, treasury=${this.treasuryUserId}`,
+    );
+  }
 
   async settleTrade(
     payload: TradeCreatedPayload,
@@ -275,13 +293,10 @@ export class TradeSettlementService {
   }
 
   private async findOrCreateTreasuryWallet(tx: PrismaTx, assetId: string) {
-    const treasuryUserId = process.env.TREASURY_USER_ID;
-    if (!treasuryUserId) {
-      throw new Error('TREASURY_USER_ID environment variable is not set');
-    }
+    // BUG-06 fix: use pre-validated this.treasuryUserId (set in constructor)
     return tx.wallet.upsert({
-      where: { userId_assetId: { userId: treasuryUserId, assetId } },
-      create: { userId: treasuryUserId, assetId },
+      where: { userId_assetId: { userId: this.treasuryUserId, assetId } },
+      create: { userId: this.treasuryUserId, assetId },
       update: {},
       select: { id: true },
     });

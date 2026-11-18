@@ -68,12 +68,64 @@ export class BlockchainDepositConsumer
     );
   }
 
+  // BUG-11 fix: use Promise.race with timeout so shutdown is not delayed
+  // by the BLOCK 2000ms window in xreadgroup
   async onModuleDestroy(): Promise<void> {
     this.running = false;
-    await this.loopPromise;
+    await Promise.race([
+      this.loopPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  }
+
+  // BUG-02 fix: drain Pending Entry List (PEL) before consuming new messages.
+  // If the process crashes between creditDeposit() and xack(), those messages
+  // stay in the PEL. On restart we re-process them; idempotency guard prevents
+  // double-credit.
+  private async drainPending(): Promise<void> {
+    // First drain any PEL messages from before last restart
+    try {
+      await this.drainPending();
+    } catch (err) {
+      this.logger.error('Failed to drain PEL, continuing anyway', err);
+    }
+
+    while (this.running) {
+      const results = (await this.redis.xreadgroup(
+        'GROUP',
+        GROUP,
+        CONSUMER,
+        'COUNT',
+        '10',
+        'STREAMS',
+        STREAM,
+        '0', // '0' = pending messages (PEL), not new ones
+      )) as Array<[string, Array<[string, string[]]>]> | null;
+
+      if (!results || !results[0]?.[1]?.length) break;
+
+      for (const [, messages] of results) {
+        for (const [streamMsgId, fields] of messages) {
+          await this.processMessage(streamMsgId, fields);
+        }
+      }
+    }
   }
 
   private async consumeLoop(): Promise<void> {
+    // First drain any PEL messages from before last restart
+    try {
+      await this.drainPending();
+    } catch (err) {
+      this.logger.error('Failed to drain PEL, continuing anyway', err);
+    }
+    // First drain any PEL messages from before last restart
+    try {
+      await this.drainPending();
+    } catch (err) {
+      this.logger.error('Failed to drain PEL, continuing anyway', err);
+    }
+
     while (this.running) {
       try {
         const results = (await this.redis.xreadgroup(

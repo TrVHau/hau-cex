@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -19,7 +20,10 @@ export class DepositsController {
   constructor(private readonly depositsService: DepositsService) {}
 
   @Get('config')
-  getConfig(@Query('asset') asset: string) {
+  getConfig(@Query('asset') asset?: string) {
+    if (!asset?.trim()) {
+      throw new BadRequestException('Query parameter "asset" is required');
+    }
     return this.depositsService.getDepositConfig(asset);
   }
 

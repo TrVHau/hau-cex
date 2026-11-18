@@ -102,4 +102,26 @@ export class MarketGateway
     this.server.to(`trades:${sym}`).emit('trade.created', payload);
     this.server.to(`trades:${sym}`).emit('TRADE', payload);
   }
+
+  /**
+   * Broadcast deposit.credited event to the specific user room.
+   * Client must join `user:<userId>` room to receive this.
+   */
+  broadcastDepositUpdated(userId: string, payload: unknown): void {
+    if (!this.server) return;
+    this.server.to(`user:${userId}`).emit('deposit.updated', payload);
+  }
+
+  @SubscribeMessage('user.subscribe')
+  async handleUserSubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { userId: string },
+  ): Promise<{ event: string; data: unknown }> {
+    if (!data?.userId) {
+      return { event: 'error', data: { message: 'userId is required' } };
+    }
+    await client.join(`user:${data.userId}`);
+    this.logger.log(`Client ${client.id} subscribed to user:${data.userId}`);
+    return { event: 'user.subscribed', data: { userId: data.userId } };
+  }
 }

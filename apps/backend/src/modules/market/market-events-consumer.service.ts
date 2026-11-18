@@ -110,6 +110,14 @@ export class MarketEventsConsumerService
             this.gateway.broadcastOrderBook(market, payload);
           } else if (messageType === 'trade.created') {
             this.gateway.broadcastTrade(market, payload);
+          } else if (messageType === 'DepositUpdated') {
+            // BUG-03 fix: handle DepositUpdated — forward to user-specific WebSocket room
+            const p = payload as Record<string, unknown>;
+            const userId =
+              (p['userId'] as string | undefined) ?? fields.partitionKey;
+            if (userId) {
+              this.gateway.broadcastDepositUpdated(userId, payload);
+            }
           }
         } catch (err) {
           this.logger.error(`Error processing market event ${msgId}`, err);
