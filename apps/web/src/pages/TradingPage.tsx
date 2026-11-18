@@ -14,6 +14,36 @@ import { ActiveOrdersPanel } from '../components/trading/ActiveOrdersPanel';
 import { Spinner } from '../components/ui';
 import { formatPrice } from '../lib/utils';
 
+interface CandleItem {
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+}
+
+// Chuỗi nến liên tục: open của nến N+1 luôn khớp chính xác close của nến N
+const CANDLE_SERIES: CandleItem[] = [
+  { open: 142, close: 125, high: 118, low: 148 }, // Green: 142 -> 125
+  { open: 125, close: 133, high: 120, low: 138 }, // Red:   125 -> 133
+  { open: 133, close: 115, high: 108, low: 136 }, // Green: 133 -> 115
+  { open: 115, close: 98,  high: 92,  low: 118 }, // Green: 115 -> 98
+  { open: 98,  close: 106, high: 94,  low: 112 }, // Red:   98 -> 106
+  { open: 106, close: 88,  high: 82,  low: 110 }, // Green: 106 -> 88
+  { open: 88,  close: 72,  high: 66,  low: 92 },  // Green: 88 -> 72
+  { open: 72,  close: 82,  high: 70,  low: 88 },  // Red:   72 -> 82
+  { open: 82,  close: 64,  high: 58,  low: 85 },  // Green: 82 -> 64
+  { open: 64,  close: 52,  high: 46,  low: 68 },  // Green: 64 -> 52
+  { open: 52,  close: 38,  high: 32,  low: 56 },  // Green: 52 -> 38
+  { open: 38,  close: 46,  high: 34,  low: 50 },  // Red:   38 -> 46
+  { open: 46,  close: 30,  high: 24,  low: 48 },  // Green: 46 -> 30
+  { open: 30,  close: 22,  high: 16,  low: 34 },  // Green: 30 -> 22
+  { open: 22,  close: 28,  high: 18,  low: 32 },  // Red:   22 -> 28
+  { open: 28,  close: 18,  high: 12,  low: 30 },  // Green: 28 -> 18
+  { open: 18,  close: 12,  high: 8,   low: 22 },  // Green: 18 -> 12
+  { open: 12,  close: 16,  high: 10,  low: 20 },  // Red:   12 -> 16
+  { open: 16,  close: 10,  high: 6,   low: 18 },  // Green: 16 -> 10
+];
+
 export function TradingPage() {
   const { symbol = 'BTC_USDT' } = useParams<{ symbol: string }>();
   const navigate = useNavigate();
@@ -238,7 +268,7 @@ export function TradingPage() {
                 <span className="text-[#a78bfa]">EMA(99): 60,442.20</span>
               </div>
 
-              {/* Realistic Candlestick SVG */}
+              {/* Realistic Candlestick SVG with continuous Open/Close alignment */}
               <svg className="w-full h-48 overflow-visible" viewBox="0 0 700 180">
                 {/* Horizontal Grid lines */}
                 <line x1="0" y1="30" x2="700" y2="30" stroke="#1c212a" strokeDasharray="3 3" />
@@ -247,72 +277,57 @@ export function TradingPage() {
                 <line x1="0" y1="160" x2="700" y2="160" stroke="#1c212a" strokeDasharray="3 3" />
 
                 {/* Candles series */}
-                {/* Candle 1 (Green) */}
-                <line x1="30" y1="110" x2="30" y2="150" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="25" y="120" width="10" height="25" fill="#0ecb81" rx="1" />
+                {CANDLE_SERIES.map((c, idx) => {
+                  const isGreen = c.close <= c.open;
+                  const color = isGreen ? '#0ecb81' : '#f6465d';
+                  const x = 30 + idx * 34;
+                  const rectY = Math.min(c.open, c.close);
+                  const rectHeight = Math.max(2, Math.abs(c.open - c.close));
 
-                {/* Candle 2 (Red) */}
-                <line x1="60" y1="100" x2="60" y2="140" stroke="#f6465d" strokeWidth="1" />
-                <rect x="55" y="115" width="10" height="15" fill="#f6465d" rx="1" />
+                  return (
+                    <g key={idx}>
+                      {/* High-Low Wick */}
+                      <line
+                        x1={x + 7}
+                        y1={c.high}
+                        x2={x + 7}
+                        y2={c.low}
+                        stroke={color}
+                        strokeWidth="1.5"
+                      />
+                      {/* Open-Close Body */}
+                      <rect
+                        x={x}
+                        y={rectY}
+                        width={14}
+                        height={rectHeight}
+                        fill={color}
+                        rx={1}
+                      />
+                    </g>
+                  );
+                })}
 
-                {/* Candle 3 (Green) */}
-                <line x1="90" y1="90" x2="90" y2="135" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="85" y="100" width="10" height="25" fill="#0ecb81" rx="1" />
-
-                {/* Candle 4 (Green) */}
-                <line x1="120" y1="75" x2="120" y2="120" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="115" y="85" width="10" height="20" fill="#0ecb81" rx="1" />
-
-                {/* Candle 5 (Red) */}
-                <line x1="150" y1="70" x2="150" y2="115" stroke="#f6465d" strokeWidth="1" />
-                <rect x="145" y="80" width="10" height="15" fill="#f6465d" rx="1" />
-
-                {/* Candle 6 (Green) */}
-                <line x1="180" y1="60" x2="180" y2="105" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="175" y="70" width="10" height="25" fill="#0ecb81" rx="1" />
-
-                {/* Candle 7 (Green) */}
-                <line x1="210" y1="50" x2="210" y2="95" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="205" y="60" width="10" height="25" fill="#0ecb81" rx="1" />
-
-                {/* Candle 8 (Red) */}
-                <line x1="240" y1="55" x2="240" y2="90" stroke="#f6465d" strokeWidth="1" />
-                <rect x="235" y="65" width="10" height="15" fill="#f6465d" rx="1" />
-
-                {/* Candle 9 (Green) */}
-                <line x1="270" y1="40" x2="270" y2="85" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="265" y="50" width="10" height="25" fill="#0ecb81" rx="1" />
-
-                {/* Candle 10 (Green) */}
-                <line x1="300" y1="35" x2="300" y2="80" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="295" y="45" width="10" height="20" fill="#0ecb81" rx="1" />
-
-                {/* Candle 11 (Green) */}
-                <line x1="330" y1="20" x2="330" y2="70" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="325" y="30" width="10" height="30" fill="#0ecb81" rx="1" />
-
-                {/* Candle 12 (Red) */}
-                <line x1="360" y1="25" x2="360" y2="65" stroke="#f6465d" strokeWidth="1" />
-                <rect x="355" y="35" width="10" height="15" fill="#f6465d" rx="1" />
-
-                {/* Candle 13 (Green) */}
-                <line x1="390" y1="15" x2="390" y2="60" stroke="#0ecb81" strokeWidth="1" />
-                <rect x="385" y="25" width="10" height="25" fill="#0ecb81" rx="1" />
-
-                {/* Moving Average curves */}
-                <path
-                  d="M20,135 Q100,105 180,80 T350,45 T500,30 T700,20"
+                {/* MA(7) Yellow curve passing through candle closes */}
+                <polyline
+                  points={CANDLE_SERIES.map((c, i) => `${30 + i * 34 + 7},${c.close}`).join(' ')}
                   fill="none"
                   stroke="#f5b642"
                   strokeWidth="1.5"
-                  opacity="0.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.85"
                 />
-                <path
-                  d="M20,150 Q120,125 220,95 T400,60 T600,45 T700,35"
+
+                {/* MA(25) Blue curve */}
+                <polyline
+                  points={CANDLE_SERIES.map((c, i) => `${30 + i * 34 + 7},${(c.close + c.open) / 2 + 6}`).join(' ')}
                   fill="none"
                   stroke="#3b82f6"
                   strokeWidth="1.5"
-                  opacity="0.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.75"
                 />
               </svg>
             </div>
