@@ -269,7 +269,7 @@ export function DashboardPage() {
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2.5">
                             <div className="w-6 h-6 rounded-full bg-[#1e232d] border border-[#2b3240] flex items-center justify-center font-bold text-[10px] text-[#f5b642]">
-                              {b.asset.slice(0, 3)}
+                              {(b.asset || '').slice(0, 3)}
                             </div>
                             <span className="font-semibold text-white">{b.asset}</span>
                           </div>

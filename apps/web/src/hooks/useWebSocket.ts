@@ -4,7 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { authStore } from '../store/authStore';
 import type { WsOrderBookUpdate, WsTradeCreated, WsDepositUpdated, OrderBook, Trade } from '../types';
 
-const WS_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+const rawUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3000';
+const WS_URL = rawUrl.replace(/\/api\/v1\/?$/, '');
 
 let sharedSocket: Socket | null = null;
 let socketRefCount = 0;

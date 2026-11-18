@@ -60,7 +60,8 @@ export function WalletPage() {
   }
 
   const filteredBalances = balances.filter((b) => {
-    const matchesSearch = b.asset.toLowerCase().includes(search.toLowerCase());
+    const assetStr = b.asset || '';
+    const matchesSearch = assetStr.toLowerCase().includes(search.toLowerCase());
     if (!matchesSearch) return false;
     if (hideSmall && parseFloat(b.total) <= 0.001) return false;
     return true;
@@ -258,7 +259,7 @@ export function WalletPage() {
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <div className="w-7 h-7 rounded-full bg-[#1e232d] border border-[#2b3240] flex items-center justify-center font-bold text-xs text-[#f5b642] font-sans">
-                              {b.asset.slice(0, 3)}
+                              {(b.asset || '').slice(0, 3)}
                             </div>
                             <div>
                               <div className="font-bold text-white font-sans">{b.asset}</div>

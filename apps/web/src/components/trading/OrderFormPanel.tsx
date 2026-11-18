@@ -132,7 +132,7 @@ export function OrderFormPanel({ market, balances }: Props) {
           <Input
             label="PRICE"
             type="number"
-            step={market.tickSize}
+            step="any"
             min="0"
             value={buyPrice}
             onChange={(e) => setBuyPrice(e.target.value)}
@@ -142,7 +142,7 @@ export function OrderFormPanel({ market, balances }: Props) {
           <Input
             label="AMOUNT"
             type="number"
-            step={`0.${'0'.repeat(Math.max(0, market.basePrecision - 1))}1`}
+            step="any"
             min="0"
             value={buyQty}
             onChange={(e) => setBuyQty(e.target.value)}
@@ -186,7 +186,7 @@ export function OrderFormPanel({ market, balances }: Props) {
           <Input
             label="PRICE"
             type="number"
-            step={market.tickSize}
+            step="any"
             min="0"
             value={sellPrice}
             onChange={(e) => setSellPrice(e.target.value)}
@@ -196,7 +196,7 @@ export function OrderFormPanel({ market, balances }: Props) {
           <Input
             label="AMOUNT"
             type="number"
-            step={`0.${'0'.repeat(Math.max(0, market.basePrecision - 1))}1`}
+            step="any"
             min="0"
             value={sellQty}
             onChange={(e) => setSellQty(e.target.value)}

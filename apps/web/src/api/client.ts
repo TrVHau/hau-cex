@@ -5,10 +5,11 @@ import axios, {
 } from 'axios';
 import { authStore } from '../store/authStore';
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+const rawUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3000';
+export const API_BASE_URL = rawUrl.endsWith('/api/v1') ? rawUrl : `${rawUrl}/api/v1`;
 
 export const apiClient: AxiosInstance = axios.create({
-  baseURL: `${BASE_URL}/api/v1`,
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -82,7 +83,7 @@ apiClient.interceptors.response.use(
 
       try {
         const res = await axios.post<{ data: { accessToken: string; refreshToken: string } }>(
-          `${BASE_URL}/api/v1/auth/refresh`,
+          `${API_BASE_URL}/auth/refresh`,
           { refreshToken },
         );
         const { accessToken, refreshToken: newRefreshToken } = res.data.data;
