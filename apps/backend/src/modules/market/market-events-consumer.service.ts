@@ -44,7 +44,10 @@ export class MarketEventsConsumerService
         'CREATE',
         MARKET_EVENTS_STREAM,
         MARKET_CONSUMER_GROUP,
-        '$',
+        // BUG-10 fix: use '0' so the group processes existing messages when first
+        // created (e.g. after Redis flush). Orderbook/trade messages are idempotent
+        // broadcasts; DepositUpdated needs delivery so we cannot afford '$'.
+        '0',
         'MKSTREAM',
       );
     } catch (error) {
@@ -57,6 +60,10 @@ export class MarketEventsConsumerService
       }
     }
 
+    // BUG-10 fix: drain PEL (messages unacked from previous instance) before
+    // consuming new ones. Critical for DepositUpdated delivery after restart.
+    await this.drainPending();
+
     while (this.running) {
       try {
         await this.processBatch();
@@ -65,6 +72,25 @@ export class MarketEventsConsumerService
       }
 
       await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  private async drainPending(): Promise<void> {
+    while (this.running) {
+      const result = (await this.redis.xreadgroup(
+        'GROUP',
+        MARKET_CONSUMER_GROUP,
+        this.consumerName,
+        'COUNT',
+        '50',
+        'STREAMS',
+        MARKET_EVENTS_STREAM,
+        '0', // pending messages only
+      )) as RedisStreamReadResult;
+
+      if (!result || !result[0]?.[1]?.length) break;
+
+      await this.processBatchResult(result);
     }
   }
 
@@ -82,6 +108,13 @@ export class MarketEventsConsumerService
       '>',
     )) as RedisStreamReadResult;
 
+    if (!result) return;
+    await this.processBatchResult(result);
+  }
+
+  private async processBatchResult(
+    result: RedisStreamReadResult,
+  ): Promise<void> {
     if (!result) return;
 
     const ackIds: string[] = [];

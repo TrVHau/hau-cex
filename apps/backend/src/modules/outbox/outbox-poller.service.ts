@@ -109,14 +109,16 @@ export class OutboxPollerService
           WHERE id = ${row.id}::uuid
         `;
       } catch (error) {
-        // Exponential backoff: 1, 2, 4, 8, 16, 32 seconds (capped at 32)
-        const delaySeconds = Math.min(Math.pow(2, row.retry_count), 32);
-
+        // BUG-09 fix: compute delaySeconds inside the SQL using the DB's current
+        // retry_count so it stays correct even if multiple poller instances race.
+        // Exponential backoff: 2^retry_count seconds, capped at 32s (matches app logic).
         await this.prisma.$executeRaw`
           UPDATE outbox_events
-          SET retry_count = retry_count + 1,
-              last_error = ${String(error)},
-              next_retry_at = NOW() + (${delaySeconds} * INTERVAL '1 second'),
+          SET retry_count      = retry_count + 1,
+              last_error        = ${String(error)},
+              next_retry_at     = NOW() + (
+                LEAST(POWER(2, retry_count + 1), 32) * INTERVAL '1 second'
+              ),
               status = CASE
                 WHEN retry_count + 1 >= 5 THEN 'FAILED'::outbox_status
                 ELSE status

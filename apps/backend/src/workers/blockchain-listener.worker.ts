@@ -76,6 +76,11 @@ export class BlockchainListenerWorker implements OnModuleInit, OnModuleDestroy {
     );
 
     try {
+      // BUG-04: accountReference from the chain event is bytes32 (may be mixed-case hex).
+      // We normalize to lowercase before querying because DepositsService.createIntent()
+      // stores accountReference as '0x' + randomBytes(32).toString('hex') which is
+      // always lowercase. The .toLowerCase() here and in the DB column are therefore
+      // consistent; this comment documents the invariant explicitly.
       const deposit = await this.prisma.deposit.findFirst({
         where: { accountReference: accountReference.toLowerCase() },
         include: { asset: { select: { contractAddress: true } } },
