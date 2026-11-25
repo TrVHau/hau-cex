@@ -37,8 +37,11 @@ export function RegisterPage() {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white">HAU CEX</h1>
-          <p className="text-gray-400 mt-2">Tạo tài khoản mới</p>
+          <Link to="/" className="inline-flex flex-col items-center gap-3 group">
+            <img src="/logo-icon.png" alt="HAU CEX" className="w-16 h-16 rounded-2xl shadow-xl transition-transform group-hover:scale-105" />
+            <img src="/logo.png" alt="HAU CEX" className="h-7 w-auto object-contain" />
+          </Link>
+          <p className="text-gray-400 mt-2 text-sm">Tạo tài khoản mới</p>
         </div>
 
         <form

@@ -127,8 +127,9 @@ export function ActiveOrdersPanel({ currentSymbol, tickSize, basePrecision }: Pr
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1c212a] font-numeric">
-              {filteredOrders.map((o: Order) => {
+              {filteredOrders.map((o: Order, idx: number) => {
                 const isBuy = o.side === 'BUY';
+                const orderKey = o.id || (o as unknown as { orderId?: string }).orderId || `order-${idx}`;
                 let total = '0.00';
                 let filledPct = '0%';
                 try {
@@ -142,24 +143,24 @@ export function ActiveOrdersPanel({ currentSymbol, tickSize, basePrecision }: Pr
                 }
 
                 return (
-                  <tr key={o.id} className="hover:bg-[#1a1e26] transition-colors">
-                    <td className="py-2.5 px-4 text-[#848e9c]">
+                  <tr key={orderKey} className="hover:bg-[#1a1e26] transition-colors">
+                    <td className="py-2.5 px-3 text-[#848e9c]">
                       {formatDateTime(o.createdAt).split(' ')[1] ?? formatDateTime(o.createdAt)}
                     </td>
-                    <td className="py-2.5 px-4 font-bold text-white font-sans">{o.symbol}</td>
-                    <td className="py-2.5 px-4 text-[#eaecef] font-sans">{o.type}</td>
-                    <td className="py-2.5 px-4 font-bold font-sans">
+                    <td className="py-2.5 px-3 font-bold text-white font-sans">{o.symbol}</td>
+                    <td className="py-2.5 px-3 text-[#eaecef] font-sans">{o.type}</td>
+                    <td className="py-2.5 px-3 font-bold font-sans">
                       <span className={isBuy ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
                         {o.side}
                       </span>
                     </td>
-                    <td className="py-2.5 px-4 text-right text-white">
+                    <td className="py-2.5 px-3 text-right text-white">
                       {formatPrice(o.price, tickSize)}
                     </td>
-                    <td className="py-2.5 px-4 text-right text-white">
+                    <td className="py-2.5 px-3 text-right text-white">
                       {formatQty(o.quantity, basePrecision)}
                     </td>
-                    <td className="py-2.5 px-4 text-right text-[#848e9c]">
+                    <td className="py-2.5 px-3 text-right text-[#848e9c]">
                       <div className="flex items-center justify-end gap-1.5">
                         <div className="w-12 h-1.5 rounded-full bg-[#1e232d] overflow-hidden">
                           <div
@@ -170,8 +171,8 @@ export function ActiveOrdersPanel({ currentSymbol, tickSize, basePrecision }: Pr
                         <span>{filledPct}</span>
                       </div>
                     </td>
-                    <td className="py-2.5 px-4 text-right font-medium text-white">{total}</td>
-                    <td className="py-2.5 px-4 text-right font-sans">
+                    <td className="py-2.5 px-3 text-right font-medium text-white">{total}</td>
+                    <td className="py-2.5 px-3 text-right font-sans">
                       <Button
                         variant="ghost"
                         size="xs"

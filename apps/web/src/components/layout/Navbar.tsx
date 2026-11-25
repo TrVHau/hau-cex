@@ -13,8 +13,8 @@ export function Navbar() {
   return (
     <nav className="bg-gray-900 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
       <div className="flex items-center gap-6">
-        <Link to="/" className="text-blue-400 font-bold text-lg tracking-tight">
-          HAU CEX
+        <Link to="/" className="flex items-center gap-2 hover:opacity-90 transition-opacity">
+          <img src="/logo.png" alt="HAU CEX" className="h-7 w-auto object-contain" />
         </Link>
         <Link to="/markets" className="text-gray-300 hover:text-white text-sm transition-colors">
           Markets

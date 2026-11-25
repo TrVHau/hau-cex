@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard,
   BarChart2,
@@ -35,12 +35,12 @@ export function Sidebar() {
     <aside className="w-56 bg-[#0b0e11] border-r border-[#1c212a] flex flex-col justify-between shrink-0 select-none min-h-screen sticky top-0 h-screen overflow-hidden">
       <div className="flex flex-col flex-1 overflow-y-auto">
         {/* Brand Logo */}
-        <div className="h-16 flex items-center px-5 gap-3 border-b border-[#1c212a] shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-[#f5b642] flex items-center justify-center font-black text-black text-base shadow-sm">
-            ⚡
-          </div>
-          <span className="font-bold tracking-wider text-white text-base">HAU-CEX</span>
-        </div>
+        <Link
+          to="/"
+          className="h-16 flex items-center px-4 gap-2.5 border-b border-[#1c212a] shrink-0 hover:opacity-90 transition-opacity"
+        >
+          <img src="/logo.png" alt="HAU-CEX Logo" className="h-8 max-h-8 w-auto object-contain" />
+        </Link>
 
         {/* Navigation Menu */}
         <nav className="p-3 space-y-1">

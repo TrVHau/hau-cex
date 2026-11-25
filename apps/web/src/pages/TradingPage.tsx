@@ -137,8 +137,8 @@ export function TradingPage() {
 
       {/* ─── Main 3-Column Layout ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-        {/* Left Column: Mini Markets List (col-span-12 xl:col-span-2 lg:col-span-3) */}
-        <div className="col-span-12 lg:col-span-3 xl:col-span-2 bg-[#14171d] border border-[#232933] rounded-xl p-3 flex flex-col justify-between">
+        {/* Left Column: Mini Markets List (visible on xl+ so chart and orderbook are roomy on lg) */}
+        <div className="hidden xl:flex xl:col-span-2 bg-[#14171d] border border-[#232933] rounded-xl p-3 flex-col justify-between">
           <div>
             {/* Search */}
             <div className="relative mb-2.5">
@@ -206,8 +206,8 @@ export function TradingPage() {
           </div>
         </div>
 
-        {/* Center Column: Chart + Order Form + Active Orders (col-span-12 lg:col-span-6 xl:col-span-7) */}
-        <div className="col-span-12 lg:col-span-6 xl:col-span-7 space-y-3">
+        {/* Center Column: Chart + Order Form + Active Orders (col-span-12 lg:col-span-8 xl:col-span-7) */}
+        <div className="col-span-12 lg:col-span-8 xl:col-span-7 space-y-3">
           {/* Candlestick Chart Card */}
           <div className="bg-[#14171d] border border-[#232933] rounded-xl p-3.5 flex flex-col justify-between overflow-hidden">
             {/* Chart Toolbar */}
@@ -260,8 +260,8 @@ export function TradingPage() {
           />
         </div>
 
-        {/* Right Column: Order Book & Market Trades (col-span-12 lg:col-span-3) */}
-        <div className="col-span-12 lg:col-span-3 space-y-3">
+        {/* Right Column: Order Book & Market Trades (col-span-12 lg:col-span-4 xl:col-span-3) */}
+        <div className="col-span-12 lg:col-span-4 xl:col-span-3 space-y-3">
           <OrderBookPanel
             symbol={market.symbol}
             tickSize={market.tickSize}
