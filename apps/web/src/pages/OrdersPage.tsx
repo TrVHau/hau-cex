@@ -37,11 +37,15 @@ export function OrdersPage() {
     }
   };
 
-  const displayedOrders = activeTab === 'ACTIVE' ? activeOrders : allOrders;
-  const filteredOrders = displayedOrders.filter((o) =>
-    o.symbol.toLowerCase().includes(search.toLowerCase()) ||
-    o.id.toLowerCase().includes(search.toLowerCase())
-  );
+  const safeActive = Array.isArray(activeOrders) ? activeOrders : [];
+  const safeAll = Array.isArray(allOrders) ? allOrders : [];
+  const displayedOrders = activeTab === 'ACTIVE' ? safeActive : safeAll;
+  const filteredOrders = displayedOrders.filter((o) => {
+    const sym = o?.symbol || '';
+    const id = o?.id || '';
+    const q = search.toLowerCase();
+    return sym.toLowerCase().includes(q) || id.toLowerCase().includes(q);
+  });
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">

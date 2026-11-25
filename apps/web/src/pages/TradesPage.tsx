@@ -22,15 +22,19 @@ export function TradesPage() {
 
   const { data: allOrders = [], isLoading, refetch } = useOrders();
 
+  const safeOrders = Array.isArray(allOrders) ? allOrders : [];
+
   // Lọc các order đã FILLED (các lệnh đã khớp thành công)
-  const executedTrades = allOrders.filter(
-    (o) => o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED'
+  const executedTrades = safeOrders.filter(
+    (o) => o && (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
 
-  const filteredTrades = executedTrades.filter((t) =>
-    t.symbol.toLowerCase().includes(search.toLowerCase()) ||
-    t.id.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredTrades = executedTrades.filter((t) => {
+    const sym = t?.symbol || '';
+    const id = t?.id || '';
+    const q = search.toLowerCase();
+    return sym.toLowerCase().includes(q) || id.toLowerCase().includes(q);
+  });
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">

@@ -7,6 +7,7 @@ import {
 import {
   Prisma,
   AssetStatus,
+  LedgerEntryType,
   TradingPairStatus,
   UserRole,
   UserStatus,
@@ -19,10 +20,19 @@ import {
   formatDecimal,
   nextCommandSequence,
   PaginatedResponseDto,
+  ReferenceType,
 } from '../../common';
 import { OpenMarketPayload, SuspendMarketPayload } from '../engine/types';
 import { v7 as uuidv7 } from 'uuid';
-import { AdminUserItem, AdminAssetItem, AdminMarketItem } from './types';
+import {
+  AdminUserItem,
+  AdminAssetItem,
+  AdminMarketItem,
+  AdminTreasuryAccountInfo,
+  AdminTreasuryOverview,
+  AdminTreasuryLedgerItem,
+} from './types';
+import { TreasuryLedgerQueryDto } from './dto/treasury-ledger-query.dto';
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -378,5 +388,203 @@ export class AdminService {
     );
 
     return { status: 'SUSPENDED' };
+  }
+
+  // Treasury
+
+  /**
+   * Resolve Treasury system account from TREASURY_USER_ID env or fallback to first SYSTEM user.
+   */
+  private async resolveTreasuryAccount(): Promise<AdminTreasuryAccountInfo> {
+    const envTreasuryId = process.env['TREASURY_USER_ID']?.trim();
+    const select = {
+      id: true,
+      email: true,
+      fullName: true,
+      role: true,
+    } as const;
+
+    const account = envTreasuryId
+      ? await this.prisma.user.findUnique({
+          where: { id: envTreasuryId },
+          select,
+        })
+      : await this.prisma.user.findFirst({
+          where: { role: UserRole.SYSTEM },
+          orderBy: { createdAt: 'asc' },
+          select,
+        });
+
+    if (!account) {
+      throw new NotFoundException('Treasury system account not found');
+    }
+
+    return account;
+  }
+
+  /**
+   * Lấy tổng quan ví Treasury & tổng doanh thu phí giao dịch đã thu theo từng asset.
+   */
+  async getTreasuryOverview(): Promise<AdminTreasuryOverview> {
+    const account = await this.resolveTreasuryAccount();
+
+    const [assets, wallets, feeStats, lastFeeEntry] = await Promise.all([
+      this.prisma.asset.findMany({
+        orderBy: { symbol: 'asc' },
+        select: {
+          id: true,
+          symbol: true,
+          name: true,
+          decimals: true,
+        },
+      }),
+      this.prisma.wallet.findMany({
+        where: { userId: account.id },
+        select: {
+          id: true,
+          assetId: true,
+          availableBalance: true,
+          lockedBalance: true,
+          updatedAt: true,
+        },
+      }),
+      this.prisma.ledgerEntry.groupBy({
+        by: ['assetId'],
+        where: {
+          userId: account.id,
+          entryType: LedgerEntryType.TRADING_FEE,
+        },
+        _sum: { amount: true },
+        _count: { id: true },
+      }),
+      this.prisma.ledgerEntry.findFirst({
+        where: {
+          userId: account.id,
+          entryType: LedgerEntryType.TRADING_FEE,
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { createdAt: true },
+      }),
+    ]);
+
+    const walletByAsset = new Map(wallets.map((w) => [w.assetId, w]));
+    const feeByAsset = new Map(feeStats.map((s) => [s.assetId, s]));
+
+    let totalFeeEntries = 0;
+    const zero = new Prisma.Decimal(0);
+
+    const treasuryWallets = assets.map((asset) => {
+      const wallet = walletByAsset.get(asset.id);
+      const stat = feeByAsset.get(asset.id);
+      const available = wallet?.availableBalance ?? zero;
+      const locked = wallet?.lockedBalance ?? zero;
+      const total = available.plus(locked);
+      const feesCollected = stat?._sum.amount ?? zero;
+      const entryCount = stat?._count.id ?? 0;
+
+      totalFeeEntries += entryCount;
+
+      return {
+        walletId: wallet?.id ?? null,
+        assetId: asset.id,
+        assetSymbol: asset.symbol,
+        assetName: asset.name,
+        decimals: asset.decimals,
+        availableBalance: formatDecimal(available),
+        lockedBalance: formatDecimal(locked),
+        totalBalance: formatDecimal(total),
+        totalFeesCollected: formatDecimal(feesCollected),
+        feeEntryCount: entryCount,
+        updatedAt: wallet?.updatedAt.toISOString() ?? null,
+      };
+    });
+
+    return {
+      account,
+      wallets: treasuryWallets,
+      totalFeeEntries,
+      lastCollectedAt: lastFeeEntry?.createdAt.toISOString() ?? null,
+    };
+  }
+
+  /**
+   * Liệt kê lịch sử dòng tiền của Treasury (cursor-based pagination),
+   * kèm thông tin Trade (cặp giao dịch, giá khớp, khối lượng) theo batch query tránh N+1.
+   */
+  async getTreasuryLedger(
+    query: TreasuryLedgerQueryDto,
+  ): Promise<PaginatedResponseDto<AdminTreasuryLedgerItem>> {
+    const account = await this.resolveTreasuryAccount();
+    const { assetSymbol, entryType, limit = 20, cursor } = query;
+    const normalizedSymbol = assetSymbol?.trim().toUpperCase();
+    const cursorFilter = buildCursorWhere(cursor);
+
+    const where: Prisma.LedgerEntryWhereInput = {
+      userId: account.id,
+      ...(normalizedSymbol && { asset: { symbol: normalizedSymbol } }),
+      ...(entryType && { entryType }),
+      ...(cursorFilter && { OR: cursorFilter.OR }),
+    };
+
+    const rows = await this.prisma.ledgerEntry.findMany({
+      where,
+      include: {
+        asset: { select: { symbol: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    // Chỉ query Trade cho những items thực sự được trả về (tối đa `limit`)
+    const pageRows = rows.length > limit ? rows.slice(0, limit) : rows;
+    const tradeRefType = String(ReferenceType.TRADE);
+    const tradeIds = Array.from(
+      new Set(
+        pageRows
+          .filter((r) => r.referenceType === tradeRefType)
+          .map((r) => r.referenceId),
+      ),
+    );
+
+    const trades =
+      tradeIds.length > 0
+        ? await this.prisma.trade.findMany({
+            where: { id: { in: tradeIds } },
+            select: {
+              id: true,
+              executionPrice: true,
+              executedQuantity: true,
+              takerSide: true,
+              tradingPair: { select: { symbol: true } },
+            },
+          })
+        : [];
+
+    const tradeMap = new Map(trades.map((t) => [t.id, t]));
+
+    return buildPaginatedResult(rows, limit, (row) => {
+      const trade =
+        row.referenceType === tradeRefType
+          ? tradeMap.get(row.referenceId)
+          : undefined;
+
+      return {
+        id: row.id,
+        assetSymbol: row.asset.symbol,
+        entryType: row.entryType,
+        balanceType: row.balanceType,
+        amount: formatDecimal(row.amount),
+        beforeBalance: formatDecimal(row.beforeBalance),
+        afterBalance: formatDecimal(row.afterBalance),
+        referenceType: row.referenceType,
+        referenceId: row.referenceId,
+        marketSymbol: trade?.tradingPair.symbol ?? null,
+        executionPrice: trade ? formatDecimal(trade.executionPrice) : null,
+        executedQuantity: trade ? formatDecimal(trade.executedQuantity) : null,
+        takerSide: trade?.takerSide ?? null,
+        operationId: row.operationId,
+        createdAt: row.createdAt.toISOString(),
+      };
+    });
   }
 }

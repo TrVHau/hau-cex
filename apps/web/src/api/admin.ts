@@ -1,15 +1,27 @@
 import apiClient from './client';
-import type { AdminUser, AdminAsset, AdminMarket } from '../types';
+import type {
+  AdminUser,
+  AdminAsset,
+  AdminMarket,
+  AdminTreasuryOverview,
+  AdminTreasuryLedgerItem,
+  CursorPaginatedResponse,
+} from '../types';
 
 export const adminApi = {
   // Users
-  async getUsers(): Promise<AdminUser[]> {
-    const res = await apiClient.get<AdminUser[]>('/admin/users');
+  async getUsers(params?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<CursorPaginatedResponse<AdminUser>> {
+    const res = await apiClient.get<CursorPaginatedResponse<AdminUser>>('/admin/users', {
+      params,
+    });
     return res.data;
   },
 
-  async lockUser(id: string): Promise<void> {
-    await apiClient.post(`/admin/users/${id}/lock`);
+  async lockUser(id: string, reason?: string): Promise<void> {
+    await apiClient.post(`/admin/users/${id}/lock`, reason ? { reason } : {});
   },
 
   async unlockUser(id: string): Promise<void> {
@@ -17,9 +29,22 @@ export const adminApi = {
   },
 
   // Assets
-  async getAssets(): Promise<AdminAsset[]> {
-    const res = await apiClient.get<AdminAsset[]>('/admin/assets');
+  async getAssets(params?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<CursorPaginatedResponse<AdminAsset>> {
+    const res = await apiClient.get<CursorPaginatedResponse<AdminAsset>>('/admin/assets', {
+      params,
+    });
     return res.data;
+  },
+
+  async activateAsset(id: string): Promise<void> {
+    await apiClient.post(`/admin/assets/${id}/activate`);
+  },
+
+  async deactivateAsset(id: string): Promise<void> {
+    await apiClient.post(`/admin/assets/${id}/deactivate`);
   },
 
   // Markets
@@ -28,11 +53,35 @@ export const adminApi = {
     return res.data;
   },
 
-  async openMarket(id: string): Promise<void> {
-    await apiClient.post(`/admin/markets/${id}/open`);
+  async openMarket(id: string): Promise<{ status: string }> {
+    const res = await apiClient.post<{ status: string }>(`/admin/markets/${id}/open`);
+    return res.data;
   },
 
-  async suspendMarket(id: string): Promise<void> {
-    await apiClient.post(`/admin/markets/${id}/suspend`);
+  async suspendMarket(id: string, reason?: string): Promise<{ status: string }> {
+    const res = await apiClient.post<{ status: string }>(
+      `/admin/markets/${id}/suspend`,
+      reason ? { reason } : {},
+    );
+    return res.data;
+  },
+
+  // Treasury
+  async getTreasuryOverview(): Promise<AdminTreasuryOverview> {
+    const res = await apiClient.get<AdminTreasuryOverview>('/admin/treasury');
+    return res.data;
+  },
+
+  async getTreasuryLedger(params?: {
+    assetSymbol?: string;
+    entryType?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<CursorPaginatedResponse<AdminTreasuryLedgerItem>> {
+    const res = await apiClient.get<CursorPaginatedResponse<AdminTreasuryLedgerItem>>(
+      '/admin/treasury/ledger',
+      { params },
+    );
+    return res.data;
   },
 };
