@@ -43,6 +43,11 @@ func (c *Customer) Run(ctx context.Context) error {
 		return fmt.Errorf("create consumer group: %w", err)
 	}
 
+	// Phase 0: Replay all existing stream commands to recover in-memory books and sequence state
+	if err := c.recoverHistory(ctx); err != nil {
+		return err
+	}
+
 	// Phase 1: recover pending (PEL) messages from previous run before reading new ones
 	if err := c.drainPending(ctx); err != nil {
 		return err
@@ -123,36 +128,73 @@ func (c *Customer) drainPending(ctx context.Context) error {
 	}
 }
 
-func (c *Customer) dispatch(
-	ctx context.Context,
-	msg redis.XMessage,
-) error {
+// recoverHistory replays all historical messages from stream:engine:commands using XRANGE
+// to reconstruct the in-memory order books and sequence counters without re-publishing events.
+func (c *Customer) recoverHistory(ctx context.Context) error {
+	msgs, err := c.redis.XRange(ctx, EngineCommandsStream, "-", "+").Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil
+		}
+		return fmt.Errorf("recover history: %w", err)
+	}
 
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	log.Printf("Replaying %d historical engine commands to recover in-memory state...", len(msgs))
+	for _, msg := range msgs {
+		if _, err := c.executeCommand(msg); err != nil {
+			log.Printf("warning: error during history replay for msg %s: %v", msg.ID, err)
+		}
+	}
+
+	// Ensure all engines are in StateReady and sync orderbook snapshot
+	for _, engine := range c.engines {
+		engine.State = pair.StateReady
+		event := pair.BuildOrderBookChanged(engine, engine.LastProcessedCmdSeq)
+		if err := c.publisher.PublishBatch(ctx, []message.EventEnvelope{event}); err != nil {
+			log.Printf("warning: publish recovered orderbook snapshot failed: %v", err)
+		}
+	}
+
+	// Advance consumer group to last replayed message ID so XReadGroup > only reads new commands
+	lastMsgID := msgs[len(msgs)-1].ID
+	if err := c.redis.XGroupSetID(ctx, EngineCommandsStream, CommandGroup, lastMsgID).Err(); err != nil {
+		log.Printf("warning: XGroupSetID failed: %v", err)
+	}
+
+	log.Printf("Engine recovery complete. Active pairs: %d. Consumer group set to %s", len(c.engines), lastMsgID)
+	return nil
+}
+
+func (c *Customer) executeCommand(msg redis.XMessage) ([]message.EventEnvelope, error) {
 	// 1. Extract fields from Redis message
 	messageType, ok := msg.Values["messageType"].(string)
 	if !ok {
-		return fmt.Errorf("invalid messageType")
+		return nil, fmt.Errorf("invalid messageType")
 	}
 
 	partitionKey, ok := msg.Values["partitionKey"].(string)
 	if !ok {
-		return fmt.Errorf("invalid partitionKey")
+		return nil, fmt.Errorf("invalid partitionKey")
 	}
 
 	commandSeqStr, ok := msg.Values["commandSeq"].(string)
 	if !ok {
-		return fmt.Errorf("invalid commandSeq")
+		return nil, fmt.Errorf("invalid commandSeq")
 	}
 
 	payload, ok := msg.Values["payload"].(string)
 	if !ok {
-		return fmt.Errorf("invalid payload")
+		return nil, fmt.Errorf("invalid payload")
 	}
 
-	// 2. Parse command sequence — strconv is faster and idiomatic vs fmt.Sscanf
+	// 2. Parse command sequence
 	commandSeq, err := strconv.ParseUint(commandSeqStr, 10, 64)
 	if err != nil {
-		return fmt.Errorf("invalid commandSeq %q: %w", commandSeqStr, err)
+		return nil, fmt.Errorf("invalid commandSeq %q: %w", commandSeqStr, err)
 	}
 
 	// 3. partitionKey is the tradingPairId
@@ -175,44 +217,58 @@ func (c *Customer) dispatch(
 	case "OpenMarket":
 		var command message.OpenMarketCommand
 		if err := json.Unmarshal([]byte(payload), &command); err != nil {
-			return fmt.Errorf("unmarshal OpenMarket: %w", err)
+			return nil, fmt.Errorf("unmarshal OpenMarket: %w", err)
 		}
 		events = engine.HandleOpenMarket(command, commandSeq)
 
 	case "PlaceOrder":
 		var command message.PlaceOrderCommand
 		if err := json.Unmarshal([]byte(payload), &command); err != nil {
-			return fmt.Errorf("unmarshal PlaceOrder: %w", err)
+			return nil, fmt.Errorf("unmarshal PlaceOrder: %w", err)
 		}
 		events = engine.HandlePlaceOrder(command, commandSeq)
 
 	case "CancelOrder":
 		var command message.CancelOrderCommand
 		if err := json.Unmarshal([]byte(payload), &command); err != nil {
-			return fmt.Errorf("unmarshal CancelOrder: %w", err)
+			return nil, fmt.Errorf("unmarshal CancelOrder: %w", err)
 		}
 		events = engine.HandleCancelOrder(command, commandSeq)
+
 	case "SuspendMarket":
 		var command message.SuspendMarketCommand
 		if err := json.Unmarshal([]byte(payload), &command); err != nil {
-			return fmt.Errorf("unmarshal SuspendMarket: %w", err)
+			return nil, fmt.Errorf("unmarshal SuspendMarket: %w", err)
 		}
 		events = engine.HandleSuspendMarket(command, commandSeq)
+
 	default:
-		return fmt.Errorf("unknown message type: %s", messageType)
+		return nil, fmt.Errorf("unknown message type: %s", messageType)
 	}
 
-	// 6. Nil return from handler means duplicate commandSeq — ACK and move on
+	return events, nil
+}
+
+func (c *Customer) dispatch(
+	ctx context.Context,
+	msg redis.XMessage,
+) error {
+	events, err := c.executeCommand(msg)
+	if err != nil {
+		return err
+	}
+
+	// Nil return from handler means duplicate commandSeq — ACK and move on
 	if len(events) == 0 {
 		return c.ack(ctx, msg.ID)
 	}
 
-	// 7. Publish events — ACK only after successful publish
+	// Publish events — ACK only after successful publish
 	if err := c.publisher.PublishBatch(ctx, events); err != nil {
 		return fmt.Errorf("publish events: %w", err)
 	}
 
-	// 8. ACK after successful publish
+	// ACK after successful publish
 	return c.ack(ctx, msg.ID)
 }
 

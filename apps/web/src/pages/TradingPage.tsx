@@ -11,38 +11,9 @@ import { OrderBookPanel } from '../components/trading/OrderBookPanel';
 import { RecentTradesPanel } from '../components/trading/RecentTradesPanel';
 import { OrderFormPanel } from '../components/trading/OrderFormPanel';
 import { ActiveOrdersPanel } from '../components/trading/ActiveOrdersPanel';
+import { CandlestickChart } from '../components/trading/CandlestickChart';
 import { Spinner } from '../components/ui';
 import { formatPrice } from '../lib/utils';
-
-interface CandleItem {
-  open: number;
-  close: number;
-  high: number;
-  low: number;
-}
-
-// Chuỗi nến liên tục: open của nến N+1 luôn khớp chính xác close của nến N
-const CANDLE_SERIES: CandleItem[] = [
-  { open: 142, close: 125, high: 118, low: 148 }, // Green: 142 -> 125
-  { open: 125, close: 133, high: 120, low: 138 }, // Red:   125 -> 133
-  { open: 133, close: 115, high: 108, low: 136 }, // Green: 133 -> 115
-  { open: 115, close: 98,  high: 92,  low: 118 }, // Green: 115 -> 98
-  { open: 98,  close: 106, high: 94,  low: 112 }, // Red:   98 -> 106
-  { open: 106, close: 88,  high: 82,  low: 110 }, // Green: 106 -> 88
-  { open: 88,  close: 72,  high: 66,  low: 92 },  // Green: 88 -> 72
-  { open: 72,  close: 82,  high: 70,  low: 88 },  // Red:   72 -> 82
-  { open: 82,  close: 64,  high: 58,  low: 85 },  // Green: 82 -> 64
-  { open: 64,  close: 52,  high: 46,  low: 68 },  // Green: 64 -> 52
-  { open: 52,  close: 38,  high: 32,  low: 56 },  // Green: 52 -> 38
-  { open: 38,  close: 46,  high: 34,  low: 50 },  // Red:   38 -> 46
-  { open: 46,  close: 30,  high: 24,  low: 48 },  // Green: 46 -> 30
-  { open: 30,  close: 22,  high: 16,  low: 34 },  // Green: 30 -> 22
-  { open: 22,  close: 28,  high: 18,  low: 32 },  // Red:   22 -> 28
-  { open: 28,  close: 18,  high: 12,  low: 30 },  // Green: 28 -> 18
-  { open: 18,  close: 12,  high: 8,   low: 22 },  // Green: 18 -> 12
-  { open: 12,  close: 16,  high: 10,  low: 20 },  // Red:   12 -> 16
-  { open: 16,  close: 10,  high: 6,   low: 18 },  // Green: 16 -> 10
-];
 
 export function TradingPage() {
   const { symbol = 'BTC_USDT' } = useParams<{ symbol: string }>();
@@ -134,22 +105,32 @@ export function TradingPage() {
 
           <div>
             <div className="text-[10px] text-[#5e6673] font-sans">24H HIGH</div>
-            <div className="text-white font-medium">65,120.00</div>
+            <div className="text-white font-medium">
+              {ticker?.high24h ? formatPrice(ticker.high24h, market.tickSize) : formatPrice(lastPrice, market.tickSize)}
+            </div>
           </div>
 
           <div>
             <div className="text-[10px] text-[#5e6673] font-sans">24H LOW</div>
-            <div className="text-white font-medium">62,840.10</div>
+            <div className="text-white font-medium">
+              {ticker?.low24h ? formatPrice(ticker.low24h, market.tickSize) : formatPrice(lastPrice, market.tickSize)}
+            </div>
           </div>
 
           <div className="hidden md:block">
             <div className="text-[10px] text-[#5e6673] font-sans">24H VOLUME ({market.baseAsset})</div>
-            <div className="text-white font-medium">42,501.12</div>
+            <div className="text-white font-medium">
+              {Number(ticker?.volume24h ?? ticker?.baseVolume24h ?? 0).toFixed(4)}
+            </div>
           </div>
 
           <div className="hidden lg:block">
             <div className="text-[10px] text-[#5e6673] font-sans">24H VOLUME ({market.quoteAsset})</div>
-            <div className="text-white font-medium">2.73B</div>
+            <div className="text-white font-medium">
+              ${ticker?.quoteVolume24h
+                ? Number(ticker.quoteVolume24h).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                : (Number(ticker?.baseVolume24h ?? 0) * Number(lastPrice)).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+            </div>
           </div>
         </div>
       </div>
@@ -259,78 +240,13 @@ export function TradingPage() {
               </div>
             </div>
 
-            {/* SVG Candlestick Chart Visualizer */}
-            <div className="w-full h-64 relative bg-[#0e1116] rounded-lg p-2 overflow-hidden flex flex-col justify-between">
-              {/* Legend */}
-              <div className="flex items-center gap-3 text-[10px] text-[#5e6673] z-10 font-numeric">
-                <span className="text-[#f5b642]">MA(7): 63,820.10</span>
-                <span className="text-[#3b82f6]">MA(25): 62,110.45</span>
-                <span className="text-[#a78bfa]">EMA(99): 60,442.20</span>
-              </div>
-
-              {/* Realistic Candlestick SVG with continuous Open/Close alignment */}
-              <svg className="w-full h-48 overflow-visible" viewBox="0 0 700 180">
-                {/* Horizontal Grid lines */}
-                <line x1="0" y1="30" x2="700" y2="30" stroke="#1c212a" strokeDasharray="3 3" />
-                <line x1="0" y1="75" x2="700" y2="75" stroke="#1c212a" strokeDasharray="3 3" />
-                <line x1="0" y1="120" x2="700" y2="120" stroke="#1c212a" strokeDasharray="3 3" />
-                <line x1="0" y1="160" x2="700" y2="160" stroke="#1c212a" strokeDasharray="3 3" />
-
-                {/* Candles series */}
-                {CANDLE_SERIES.map((c, idx) => {
-                  const isGreen = c.close <= c.open;
-                  const color = isGreen ? '#0ecb81' : '#f6465d';
-                  const x = 30 + idx * 34;
-                  const rectY = Math.min(c.open, c.close);
-                  const rectHeight = Math.max(2, Math.abs(c.open - c.close));
-
-                  return (
-                    <g key={idx}>
-                      {/* High-Low Wick */}
-                      <line
-                        x1={x + 7}
-                        y1={c.high}
-                        x2={x + 7}
-                        y2={c.low}
-                        stroke={color}
-                        strokeWidth="1.5"
-                      />
-                      {/* Open-Close Body */}
-                      <rect
-                        x={x}
-                        y={rectY}
-                        width={14}
-                        height={rectHeight}
-                        fill={color}
-                        rx={1}
-                      />
-                    </g>
-                  );
-                })}
-
-                {/* MA(7) Yellow curve passing through candle closes */}
-                <polyline
-                  points={CANDLE_SERIES.map((c, i) => `${30 + i * 34 + 7},${c.close}`).join(' ')}
-                  fill="none"
-                  stroke="#f5b642"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity="0.85"
-                />
-
-                {/* MA(25) Blue curve */}
-                <polyline
-                  points={CANDLE_SERIES.map((c, i) => `${30 + i * 34 + 7},${(c.close + c.open) / 2 + 6}`).join(' ')}
-                  fill="none"
-                  stroke="#3b82f6"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity="0.75"
-                />
-              </svg>
-            </div>
+            {/* Dynamic Real-Time Candlestick Chart */}
+            <CandlestickChart
+              symbol={symbol}
+              timeframe={timeframe}
+              currentPrice={lastPrice}
+              tickSize={market.tickSize}
+            />
           </div>
 
           {/* Side-by-Side Order Form */}

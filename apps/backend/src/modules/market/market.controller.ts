@@ -25,6 +25,14 @@ export class MarketController {
     return this.marketService.getOrderBook(symbol, depth);
   }
 
+  @Get('markets/:symbol/orderbook')
+  getOrderBookNoHyphen(
+    @Param('symbol') symbol: string,
+    @Query('depth') depth?: number,
+  ) {
+    return this.marketService.getOrderBook(symbol, depth);
+  }
+
   @Get('markets/:symbol/trades')
   getRecentTrades(
     @Param('symbol') symbol: string,
@@ -36,6 +44,15 @@ export class MarketController {
   @Get('markets/:symbol/ticker')
   getMarketTicker(@Param('symbol') symbol: string) {
     return this.marketService.getMarketTicker(symbol);
+  }
+
+  @Get('markets/:symbol/klines')
+  getKlines(
+    @Param('symbol') symbol: string,
+    @Query('interval') interval?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.marketService.getKlines(symbol, interval, limit);
   }
 
   // ─── Phase 7 Plan aliases (/market/*) ─────────────────────────────────────
@@ -64,5 +81,14 @@ export class MarketController {
   @Get('market/ticker/:symbol')
   getMarketTickerAlias(@Param('symbol') symbol: string) {
     return this.marketService.getMarketTicker(symbol);
+  }
+
+  @Get('market/klines/:symbol')
+  getKlinesAlias(
+    @Param('symbol') symbol: string,
+    @Query('interval') interval?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.marketService.getKlines(symbol, interval, limit);
   }
 }

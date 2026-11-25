@@ -8,9 +8,14 @@ const REFRESH_TOKEN_KEY = 'hau_cex_refresh_token';
 const USER_KEY = 'hau_cex_user';
 
 export interface StoredUser {
+  id?: string;
   userId: string;
   email: string;
-  role: 'USER' | 'ADMIN';
+  fullName?: string | null;
+  role: 'USER' | 'ADMIN' | 'SYSTEM';
+  status?: 'ACTIVE' | 'LOCKED';
+  createdAt?: string;
+  lastLoginAt?: string | null;
 }
 
 export const authStore = {

@@ -37,7 +37,7 @@ export function useOrderBook(symbol: string | undefined) {
     queryKey: ['orderbook', symbol],
     queryFn: () => marketsApi.getOrderBook(symbol!),
     enabled: !!symbol,
-    staleTime: Infinity, // WS sẽ update, REST chỉ dùng khi khởi tạo
+    refetchInterval: 1_000,
   });
 }
 
@@ -46,7 +46,16 @@ export function useRecentTrades(symbol: string | undefined) {
     queryKey: ['trades', symbol],
     queryFn: () => marketsApi.getRecentTrades(symbol!),
     enabled: !!symbol,
-    staleTime: Infinity, // WS sẽ prepend trades mới
+    refetchInterval: 2_000,
+  });
+}
+
+export function useKlines(symbol: string | undefined, interval = '15m') {
+  return useQuery({
+    queryKey: ['klines', symbol, interval],
+    queryFn: () => marketsApi.getKlines(symbol!, interval),
+    enabled: !!symbol,
+    refetchInterval: 5_000,
   });
 }
 

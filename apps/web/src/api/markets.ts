@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Market, OrderBook, Trade, Ticker } from '../types';
+import type { Market, OrderBook, Trade, Ticker, Kline } from '../types';
 
 export const marketsApi = {
   async getMarkets(): Promise<Market[]> {
@@ -25,6 +25,13 @@ export const marketsApi = {
   async getRecentTrades(symbol: string, limit = 50): Promise<Trade[]> {
     const res = await apiClient.get<Trade[]>(`/markets/${symbol}/trades`, {
       params: { limit },
+    });
+    return res.data;
+  },
+
+  async getKlines(symbol: string, interval = '15m', limit = 40): Promise<Kline[]> {
+    const res = await apiClient.get<Kline[]>(`/markets/${symbol}/klines`, {
+      params: { interval, limit },
     });
     return res.data;
   },

@@ -177,6 +177,10 @@ func buildOrderOpened(e *PairEngine, cmd message.PlaceOrderCommand, cmdSeq uint6
 	})
 }
 
+func BuildOrderBookChanged(e *PairEngine, cmdSeq uint64) message.EventEnvelope {
+	return buildOrderBookChanged(e, cmdSeq)
+}
+
 func buildOrderBookChanged(e *PairEngine, cmdSeq uint64) message.EventEnvelope {
 	return envelope(e, "OrderBookChanged", cmdSeq, OrderBookChangedPayload{
 		TradingPairID: e.PairID,

@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Delete,
   HttpCode,
   HttpStatus,
   Param,
@@ -72,6 +73,15 @@ export class OrdersController {
     @Param('orderId', ParseUUIDPipe) orderId: string,
   ) {
     return this.orderQueryService.getOrderTrades(user.userId, orderId);
+  }
+
+  @Delete(':orderId')
+  @HttpCode(HttpStatus.OK)
+  cancelOrderWithDelete(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+  ) {
+    return this.ordersService.cancelOrder(user.userId, orderId);
   }
 
   @Post(':orderId/cancel')

@@ -34,10 +34,25 @@ export interface MarketDetailResult {
 }
 
 export interface MarketTickerResult {
+  symbol?: string;
   lastPrice: string | null;
   bestBid: string | null;
   bestAsk: string | null;
   baseVolume24h: string;
+  volume24h?: string;
+  high24h?: string | null;
+  low24h?: string | null;
+  priceChange24h?: string | null;
+  quoteVolume24h?: string | null;
+}
+
+export interface KlineItem {
+  time: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
 }
 
 export interface OrderBookResult {

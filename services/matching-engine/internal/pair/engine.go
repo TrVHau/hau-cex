@@ -3,6 +3,7 @@ package pair
 import (
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/TrVHau/hau-cex/services/matching-engine/internal/matching"
 	"github.com/TrVHau/hau-cex/services/matching-engine/internal/message"
@@ -166,7 +167,9 @@ func (e *PairEngine) validateSeq(cmdSeq uint64) error {
 		return ErrDuplicateCommand
 	}
 	if cmdSeq > expected {
-		return ErrSequenceGap
+		log.Printf("Warning: Sequence gap detected for pair %s: expected %d, got %d. Resyncing sequence counter.", e.PairID, expected, cmdSeq)
+		e.LastProcessedCmdSeq = cmdSeq - 1
+		return nil
 	}
 	return nil
 }

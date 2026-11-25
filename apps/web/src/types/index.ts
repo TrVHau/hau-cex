@@ -5,9 +5,32 @@ export interface AuthTokens {
 }
 
 export interface User {
+  id?: string;
   userId: string;
   email: string;
-  role: 'USER' | 'ADMIN';
+  fullName?: string | null;
+  role: 'USER' | 'ADMIN' | 'SYSTEM';
+  status?: 'ACTIVE' | 'LOCKED';
+  createdAt?: string;
+  lastLoginAt?: string | null;
+}
+
+export interface UserProfile {
+  id: string;
+  userId: string;
+  email: string;
+  fullName?: string | null;
+  role: 'USER' | 'ADMIN' | 'SYSTEM';
+  status: 'ACTIVE' | 'LOCKED';
+  createdAt: string;
+  lastLoginAt?: string | null;
+}
+
+export interface UserSession {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  isCurrent: boolean;
 }
 
 // ─── Market ────────────────────────────────────────────────────────────────
@@ -34,7 +57,20 @@ export interface Ticker {
   bestBid: string | null;
   bestAsk: string | null;
   volume24h: string | null;
+  baseVolume24h?: string | null;
+  high24h?: string | null;
+  low24h?: string | null;
   priceChange24h: string | null;
+  quoteVolume24h?: string | null;
+}
+
+export interface Kline {
+  time: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
 }
 
 // ─── Order Book ────────────────────────────────────────────────────────────

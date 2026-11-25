@@ -41,11 +41,13 @@ export function RecentTradesPanel({ symbol, tickSize, basePrecision }: Props) {
             No trades executed yet.
           </div>
         ) : (
-          trades.slice(0, 25).map((t: Trade) => {
-            const isBuy = t.side === 'BUY';
+          trades.slice(0, 25).map((t: Trade, idx: number) => {
+            const isBuy = t.side === 'BUY' || (t as any).takerSide === 'BUY';
+            const rawTime = t.createdAt || (t as any).matchedAt || (t as any).time;
+            const tradeId = t.id || (t as any).tradeId || `trade-${idx}-${t.price}`;
             return (
               <div
-                key={t.id}
+                key={tradeId}
                 className="grid grid-cols-3 px-1 py-0.5 hover:bg-[#1e232d] transition-colors rounded-sm cursor-pointer"
               >
                 <span className={`font-semibold ${isBuy ? 'text-[#0ecb81]' : 'text-[#f6465d]'}`}>
@@ -55,7 +57,7 @@ export function RecentTradesPanel({ symbol, tickSize, basePrecision }: Props) {
                   {formatQty(t.quantity, basePrecision)}
                 </span>
                 <span className="text-right text-[#848e9c] text-[11px]">
-                  {formatTime(t.createdAt)}
+                  {rawTime ? formatTime(rawTime) : '—'}
                 </span>
               </div>
             );

@@ -30,7 +30,7 @@ echo "[1/3] Resetting database..."
 cd "${BACKEND_DIR}"
 
 # Run prisma db push (apply schema without migration history reset)
-./node_modules/.bin/prisma db push --accept-data-loss --skip-generate
+./node_modules/.bin/prisma db push --accept-data-loss
 
 # Re-seed
 echo "      Seeding database..."

@@ -20,6 +20,8 @@ import {
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import ms, { type StringValue } from 'ms';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -188,16 +190,160 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
-  async getMe(userId: string): Promise<Omit<AuthenticatedUser, 'sessionId'>> {
+  async getMe(userId: string) {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
       select: {
         id: true,
         email: true,
+        fullName: true,
         role: true,
+        status: true,
+        createdAt: true,
+        lastLoginAt: true,
       },
     });
-    return { userId: user.id, email: user.email, role: user.role };
+    return {
+      userId: user.id,
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+      status: user.status,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+    };
+  }
+
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+  ): Promise<{ message: string }> {
+    if (dto.confirmPassword && dto.newPassword !== dto.confirmPassword) {
+      throw new UnprocessableEntityException('New passwords do not match');
+    }
+
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
+
+    const isCurrentValid = await bcrypt.compare(
+      dto.currentPassword,
+      user.passwordHash,
+    );
+    if (!isCurrentValid) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    if (dto.currentPassword === dto.newPassword) {
+      throw new UnprocessableEntityException(
+        'New password must be different from current password',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(
+      dto.newPassword,
+      this.bcryptSaltRounds,
+    );
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    return { message: 'Password changed successfully' };
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        fullName: dto.fullName !== undefined ? dto.fullName : undefined,
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        status: true,
+        createdAt: true,
+        lastLoginAt: true,
+      },
+    });
+
+    return {
+      userId: updated.id,
+      id: updated.id,
+      email: updated.email,
+      fullName: updated.fullName,
+      role: updated.role,
+      status: updated.status,
+      createdAt: updated.createdAt,
+      lastLoginAt: updated.lastLoginAt,
+    };
+  }
+
+  async getActiveSessions(userId: string, currentSessionId?: string) {
+    const sessions = await this.prisma.session.findMany({
+      where: {
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        createdAt: true,
+        expiresAt: true,
+      },
+    });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      isCurrent: s.id === currentSessionId,
+    }));
+  }
+
+  async revokeSession(
+    userId: string,
+    sessionId: string,
+  ): Promise<{ message: string }> {
+    const session = await this.prisma.session.findFirst({
+      where: { id: sessionId, userId, revokedAt: null },
+    });
+    if (!session) {
+      throw new UnprocessableEntityException(
+        'Session not found or already revoked',
+      );
+    }
+
+    await this.prisma.session.update({
+      where: { id: sessionId },
+      data: { revokedAt: new Date() },
+    });
+
+    return { message: 'Session revoked successfully' };
+  }
+
+  async revokeAllOtherSessions(
+    userId: string,
+    currentSessionId: string,
+  ): Promise<{ message: string; count: number }> {
+    const result = await this.prisma.session.updateMany({
+      where: {
+        userId,
+        id: { not: currentSessionId },
+        revokedAt: null,
+      },
+      data: { revokedAt: new Date() },
+    });
+
+    return {
+      message: 'All other sessions revoked successfully',
+      count: result.count,
+    };
   }
 
   // xử lý database
