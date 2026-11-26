@@ -37,9 +37,9 @@ export function Sidebar() {
         {/* Brand Logo */}
         <Link
           to="/"
-          className="h-16 flex items-center px-4 gap-2.5 border-b border-[#1c212a] shrink-0 hover:opacity-90 transition-opacity"
+          className="h-16 flex items-center px-4 border-b border-[#1c212a] shrink-0 hover:opacity-90 transition-opacity"
         >
-          <img src="/logo.png" alt="HAU-CEX Logo" className="h-8 max-h-8 w-auto object-contain" />
+          <img src="/logo.png" alt="HAU-CEX Logo" className="h-10 max-h-10 max-w-full w-auto object-contain" />
         </Link>
 
         {/* Navigation Menu */}

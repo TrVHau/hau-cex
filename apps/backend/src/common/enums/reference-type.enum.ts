@@ -2,5 +2,8 @@ export enum ReferenceType {
   ORDER = 'ORDER',
   TRADE = 'TRADE',
   DEPOSIT = 'DEPOSIT',
+  WITHDRAWAL = 'WITHDRAWAL',
+  TRANSFER = 'TRANSFER',
+  SECURITY = 'SECURITY',
   SYSTEM = 'SYSTEM',
 }

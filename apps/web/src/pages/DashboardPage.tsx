@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useAuth';
 import { useWallets, useMarkets } from '../hooks/useApi';
-import { Button, Badge, Spinner } from '../components/ui';
+import { Button, Badge, Spinner, CoinIcon } from '../components/ui';
 import { formatDecimal } from '../lib/utils';
 import Decimal from 'decimal.js';
 
@@ -21,7 +21,7 @@ export function DashboardPage() {
   const { data: balances = [], isLoading: loadingWallets } = useWallets();
   const { data: markets = [] } = useMarkets();
 
-  // Tính total balance ước lượng USD
+  // Tính total balance ước lượng USD (chỉ quy đổi khi market có lastPrice thực)
   let totalUsd = new Decimal(0);
   balances.forEach((b) => {
     try {
@@ -30,18 +30,24 @@ export function DashboardPage() {
       } else {
         // Tìm market {b.asset}_USDT
         const m = markets.find((item) => item.baseAsset === b.asset && item.quoteAsset === 'USDT');
-        const price = m?.ticker?.lastPrice ? new Decimal(m.ticker.lastPrice) : new Decimal(64231.5);
-        totalUsd = totalUsd.add(new Decimal(b.total).mul(price));
+        const rawPrice = m?.lastPrice ?? m?.ticker?.lastPrice;
+        if (rawPrice) {
+          totalUsd = totalUsd.add(new Decimal(b.total).mul(new Decimal(rawPrice)));
+        }
       }
     } catch {
       // ignore decimal error
     }
   });
 
-  const btcPrice = markets.find((m) => m.symbol === 'BTC_USDT')?.ticker?.lastPrice ?? '64231.50';
+  const btcMarket = markets.find((m) => m.symbol === 'BTC_USDT');
+  const btcPrice = btcMarket?.lastPrice ?? btcMarket?.ticker?.lastPrice ?? null;
   let totalBtc: string;
   try {
-    totalBtc = totalUsd.div(new Decimal(btcPrice)).toFixed(8);
+    totalBtc =
+      btcPrice && new Decimal(btcPrice).gt(0)
+        ? totalUsd.div(new Decimal(btcPrice)).toFixed(8)
+        : '0.00000000';
   } catch {
     totalBtc = '0.00000000';
   }
@@ -60,7 +66,7 @@ export function DashboardPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => navigate('/wallet')}
+            onClick={() => navigate('/wallet?action=deposit')}
             className="text-xs"
           >
             <ArrowDownRight className="w-3.5 h-3.5 text-[#0ecb81]" />
@@ -268,9 +274,7 @@ export function DashboardPage() {
                       <tr key={b.asset} className="hover:bg-[#1a1e26] transition-colors">
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2.5">
-                            <div className="w-6 h-6 rounded-full bg-[#1e232d] border border-[#2b3240] flex items-center justify-center font-bold text-[10px] text-[#f5b642]">
-                              {(b.asset || '').slice(0, 3)}
-                            </div>
+                            <CoinIcon symbol={b.asset} size="sm" />
                             <span className="font-semibold text-white">{b.asset}</span>
                           </div>
                         </td>
@@ -320,6 +324,7 @@ export function DashboardPage() {
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#f5b642]" />
+                <CoinIcon symbol="BTC" size="xs" />
                 <span className="text-[#eaecef]">Bitcoin (BTC)</span>
               </div>
               <span className="font-numeric font-semibold text-white">55%</span>
@@ -327,6 +332,7 @@ export function DashboardPage() {
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#0ecb81]" />
+                <CoinIcon symbol="USDT" size="xs" />
                 <span className="text-[#eaecef]">Tether (USDT)</span>
               </div>
               <span className="font-numeric font-semibold text-white">45%</span>

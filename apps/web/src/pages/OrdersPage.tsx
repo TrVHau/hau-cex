@@ -13,14 +13,33 @@ import {
   Activity,
 } from 'lucide-react';
 import { useOrders, useActiveOrders, useCancelOrder } from '../hooks/useApi';
-import { Button, Badge, Spinner } from '../components/ui';
-import { formatPrice, formatQty, formatDateTime, parseApiError } from '../lib/utils';
-import type { Order } from '../types';
+import { Button, Badge, Spinner, CoinIcon } from '../components/ui';
+import { formatPrice, formatQty, formatDateTime, parseApiError, downloadCsv } from '../lib/utils';
+import type { Order, OrderStatus } from '../types';
 import Decimal from 'decimal.js';
+
+function getStatusBadgeVariant(status: OrderStatus): 'green' | 'red' | 'yellow' | 'blue' | 'gray' {
+  switch (status) {
+    case 'FILLED':
+      return 'green';
+    case 'CANCELLED':
+    case 'REJECTED':
+      return 'red';
+    case 'PENDING':
+    case 'CANCEL_PENDING':
+    case 'PARTIALLY_FILLED':
+      return 'yellow';
+    case 'OPEN':
+      return 'blue';
+    default:
+      return 'gray';
+  }
+}
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'HISTORY' | 'SUBSCRIPTIONS'>('ACTIVE');
+  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'HISTORY' | 'FILLED'>('ACTIVE');
+  const [sideFilter, setSideFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
   const [search, setSearch] = useState('');
   const [cancelError, setCancelError] = useState<string | null>(null);
 
@@ -39,13 +58,71 @@ export function OrdersPage() {
 
   const safeActive = Array.isArray(activeOrders) ? activeOrders : [];
   const safeAll = Array.isArray(allOrders) ? allOrders : [];
-  const displayedOrders = activeTab === 'ACTIVE' ? safeActive : safeAll;
+  const filledOrders = safeAll.filter((o) => o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED');
+  const cancelledOrders = safeAll.filter((o) => o.status === 'CANCELLED' || o.status === 'REJECTED');
+
+  const displayedOrders =
+    activeTab === 'ACTIVE' ? safeActive : activeTab === 'FILLED' ? filledOrders : safeAll;
+
   const filteredOrders = displayedOrders.filter((o) => {
+    if (sideFilter !== 'ALL' && o.side !== sideFilter) return false;
     const sym = o?.symbol || '';
     const id = o?.id || '';
     const q = search.toLowerCase();
     return sym.toLowerCase().includes(q) || id.toLowerCase().includes(q);
   });
+
+  const executionRate =
+    safeAll.length > 0 ? ((filledOrders.length / safeAll.length) * 100).toFixed(1) : '0.0';
+
+  let pendingVolume = new Decimal(0);
+  const pairStats: Record<string, { count: number; notional: Decimal }> = {};
+
+  safeActive.forEach((o) => {
+    try {
+      const rem = new Decimal(o.remainingQty || o.quantity);
+      pendingVolume = pendingVolume.add(new Decimal(o.price).mul(rem));
+    } catch {
+      // ignore
+    }
+  });
+
+  safeAll.forEach((o) => {
+    try {
+      const notional = new Decimal(o.price).mul(new Decimal(o.quantity));
+      if (!pairStats[o.symbol]) {
+        pairStats[o.symbol] = { count: 0, notional: new Decimal(0) };
+      }
+      pairStats[o.symbol].count += 1;
+      pairStats[o.symbol].notional = pairStats[o.symbol].notional.add(notional);
+    } catch {
+      // ignore
+    }
+  });
+
+  const topPairs = Object.entries(pairStats)
+    .sort((a, b) => b[1].notional.comparedTo(a[1].notional))
+    .slice(0, 3);
+  const maxPairNotional = topPairs.length > 0 ? topPairs[0][1].notional : new Decimal(1);
+
+  const handleExportCsv = () => {
+    downloadCsv(
+      `hau-cex-orders-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['ID', 'CreatedAt', 'Symbol', 'Side', 'Type', 'Price', 'Quantity', 'FilledQty', 'RemainingQty', 'Status'],
+      filteredOrders.map((o) => [
+        o.id,
+        o.createdAt,
+        o.symbol,
+        o.side,
+        o.type,
+        o.price,
+        o.quantity,
+        o.filledQty,
+        o.remainingQty,
+        o.status,
+      ]),
+    );
+  };
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -62,7 +139,13 @@ export function OrdersPage() {
         </div>
 
         <div className="flex items-center gap-2.5">
-          <Button variant="secondary" size="sm" className="text-xs">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleExportCsv}
+            disabled={filteredOrders.length === 0}
+            className="text-xs"
+          >
             <Download className="w-3.5 h-3.5 text-[#848e9c]" />
             Export CSV
           </Button>
@@ -78,7 +161,7 @@ export function OrdersPage() {
         </div>
       </div>
 
-      {/* ─── Top 4 Stat Cards ─── */}
+      {/* ─── Top 4 Stat Cards (Computed from real orders) ─── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
@@ -86,40 +169,40 @@ export function OrdersPage() {
               <Clock className="w-3.5 h-3.5 text-[#5e6673]" />
               OPEN ORDERS
             </span>
-            <span className="text-[11px] text-[#0ecb81] font-semibold font-numeric">+{activeOrders.length}</span>
           </div>
-          <div className="text-2xl font-bold text-white font-numeric mt-2">{activeOrders.length}</div>
+          <div className="text-2xl font-bold text-white font-numeric mt-2">{safeActive.length}</div>
         </div>
 
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
             <span className="flex items-center gap-1.5">
               <CheckCircle className="w-3.5 h-3.5 text-[#5e6673]" />
-              EXECUTION RATE (30D)
+              FILL RATIO ({filledOrders.length}/{safeAll.length})
             </span>
-            <span className="text-[11px] text-[#0ecb81] font-semibold font-numeric">+0.8%</span>
           </div>
-          <div className="text-2xl font-bold text-white font-numeric mt-2">92.4%</div>
+          <div className="text-2xl font-bold text-white font-numeric mt-2">{executionRate}%</div>
         </div>
 
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
             <span className="flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5 text-[#5e6673]" />
-              AVG. FILL TIME
+              CANCELLED / REJECTED
             </span>
           </div>
-          <div className="text-2xl font-bold text-white font-numeric mt-2">12.4s</div>
+          <div className="text-2xl font-bold text-white font-numeric mt-2">{cancelledOrders.length}</div>
         </div>
 
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
             <span className="flex items-center gap-1.5">
               <DollarSign className="w-3.5 h-3.5 text-[#5e6673]" />
-              PENDING VOLUME
+              PENDING NOTIONAL
             </span>
           </div>
-          <div className="text-2xl font-bold text-white font-numeric mt-2">$34,945</div>
+          <div className="text-2xl font-bold text-white font-numeric mt-2">
+            ${pendingVolume.toFixed(2)}
+          </div>
         </div>
       </div>
 
@@ -136,7 +219,7 @@ export function OrdersPage() {
                   : 'text-[#848e9c] hover:text-[#eaecef]'
               }`}
             >
-              ACTIVE ORDERS ({activeOrders.length})
+              ACTIVE ORDERS ({safeActive.length})
             </button>
             <button
               onClick={() => setActiveTab('HISTORY')}
@@ -146,17 +229,17 @@ export function OrdersPage() {
                   : 'text-[#848e9c] hover:text-[#eaecef]'
               }`}
             >
-              ORDER HISTORY
+              ALL ORDERS ({safeAll.length})
             </button>
             <button
-              onClick={() => setActiveTab('SUBSCRIPTIONS')}
+              onClick={() => setActiveTab('FILLED')}
               className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'SUBSCRIPTIONS'
+                activeTab === 'FILLED'
                   ? 'bg-[#1e232d] text-[#f5b642] shadow-sm'
                   : 'text-[#848e9c] hover:text-[#eaecef]'
               }`}
             >
-              SUBSCRIPTIONS
+              FILLED ({filledOrders.length})
             </button>
           </div>
 
@@ -171,8 +254,16 @@ export function OrdersPage() {
                 className="bg-[#1b2028] border border-[#282f3c] focus:border-[#f5b642] rounded-lg py-1.5 pl-8 pr-3 text-xs text-[#eaecef] placeholder-[#5e6673] outline-none w-56"
               />
             </div>
-            <button className="p-2 rounded-lg bg-[#1b2028] border border-[#282f3c] text-[#848e9c] hover:text-[#eaecef] cursor-pointer">
+            <button
+              type="button"
+              onClick={() =>
+                setSideFilter((prev) => (prev === 'ALL' ? 'BUY' : prev === 'BUY' ? 'SELL' : 'ALL'))
+              }
+              title={`Lọc Side (hiện tại: ${sideFilter})`}
+              className="px-2.5 py-1.5 rounded-lg bg-[#1b2028] border border-[#282f3c] text-xs text-[#848e9c] hover:text-[#eaecef] cursor-pointer inline-flex items-center gap-1.5"
+            >
               <Filter className="w-3.5 h-3.5" />
+              <span>{sideFilter}</span>
             </button>
           </div>
         </div>
@@ -215,6 +306,8 @@ export function OrdersPage() {
                 ) : (
                   filteredOrders.map((o: Order) => {
                     const isBuy = o.side === 'BUY';
+                    const canCancel =
+                      o.status === 'PENDING' || o.status === 'OPEN' || o.status === 'PARTIALLY_FILLED';
                     let total = '0.00';
                     let filledPct = '0%';
                     try {
@@ -232,7 +325,12 @@ export function OrdersPage() {
                         <td className="py-3 px-4 text-[#848e9c]">
                           {formatDateTime(o.createdAt)}
                         </td>
-                        <td className="py-3 px-4 font-bold text-white font-sans">{o.symbol}</td>
+                        <td className="py-3 px-4 font-bold text-white font-sans">
+                          <div className="flex items-center gap-2">
+                            <CoinIcon symbol={o.symbol.split('_')[0] ?? o.symbol} size="xs" />
+                            <span>{o.symbol}</span>
+                          </div>
+                        </td>
                         <td className="py-3 px-4 text-[#eaecef] font-sans">{o.type}</td>
                         <td className="py-3 px-4 font-bold font-sans">
                           <span className={isBuy ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
@@ -258,23 +356,14 @@ export function OrdersPage() {
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-white">${total}</td>
                         <td className="py-3 px-4 text-right font-sans">
-                          <Badge
-                            variant={
-                              o.status === 'FILLED'
-                                ? 'green'
-                                : o.status === 'CANCELLED'
-                                ? 'red'
-                                : o.status === 'PARTIALLY_FILLED'
-                                ? 'yellow'
-                                : 'blue'
-                            }
-                            size="sm"
-                          >
+                          <Badge variant={getStatusBadgeVariant(o.status)} size="sm">
                             {o.status}
                           </Badge>
                         </td>
                         <td className="py-3 px-4 text-right font-sans">
-                          {(o.status === 'OPEN' || o.status === 'PARTIALLY_FILLED') && (
+                          {o.status === 'CANCEL_PENDING' ? (
+                            <span className="text-[11px] text-[#f5b642]">Cancelling...</span>
+                          ) : canCancel ? (
                             <Button
                               variant="ghost"
                               size="xs"
@@ -284,6 +373,8 @@ export function OrdersPage() {
                             >
                               Cancel
                             </Button>
+                          ) : (
+                            <span className="text-[#5e6673]">—</span>
                           )}
                         </td>
                       </tr>
@@ -296,26 +387,26 @@ export function OrdersPage() {
         )}
       </div>
 
-      {/* ─── Bottom Panels: Execution Settings & Frequently Traded Pairs ─── */}
+      {/* ─── Bottom Panels: Execution Rules & Frequently Traded Pairs ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         <div className="lg:col-span-6 bg-[#14171d] border border-[#232933] rounded-xl p-5 flex flex-col justify-between">
           <div>
-            <div className="text-sm font-bold text-white mb-1">Execution Settings</div>
+            <div className="text-sm font-bold text-white mb-1">Exchange Order Rules</div>
             <p className="text-xs text-[#848e9c] mb-4">
-              Configure how your orders are executed across the exchange.
+              Active matching policy applied by the HAU-CEX engine.
             </p>
             <div className="space-y-3">
               <div className="p-3 bg-[#1b2028] rounded-lg border border-[#282f3c] flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-semibold text-white">Post-Only Mode</div>
-                  <div className="text-[10px] text-[#848e9c]">Ensures your limit orders are always added as maker.</div>
+                  <div className="text-xs font-semibold text-white">Order Type</div>
+                  <div className="text-[10px] text-[#848e9c]">Price-time priority matching for Limit orders.</div>
                 </div>
-                <input type="checkbox" defaultChecked className="accent-[#f5b642] w-4 h-4 cursor-pointer" />
+                <Badge variant="green" size="sm">LIMIT</Badge>
               </div>
               <div className="p-3 bg-[#1b2028] rounded-lg border border-[#282f3c] flex items-center justify-between">
                 <div>
                   <div className="text-xs font-semibold text-white">Time-In-Force (TIF)</div>
-                  <div className="text-[10px] text-[#848e9c]">Good 'Til Canceled is the default behavior.</div>
+                  <div className="text-[10px] text-[#848e9c]">Good &apos;Til Canceled is the active behavior.</div>
                 </div>
                 <Badge variant="yellow" size="sm">GTC</Badge>
               </div>
@@ -326,32 +417,38 @@ export function OrdersPage() {
         <div className="lg:col-span-6 bg-[#14171d] border border-[#232933] rounded-xl p-5 flex flex-col justify-between">
           <div>
             <div className="text-sm font-bold text-white mb-1">Frequently Traded Pairs</div>
-            <p className="text-xs text-[#848e9c] mb-4">Trading volume distribution across your last 100 orders.</p>
+            <p className="text-xs text-[#848e9c] mb-4">
+              Order notional breakdown across your {safeAll.length} recorded orders.
+            </p>
             <div className="space-y-3 font-numeric text-xs">
-              <div>
-                <div className="flex justify-between text-[#eaecef] mb-1">
-                  <span className="font-sans font-bold">BTC/USDT</span>
-                  <span className="text-[#0ecb81]">+$42k (Vol: $1.2M)</span>
-                </div>
-                <div className="w-full h-1.5 rounded-full bg-[#1b2028] overflow-hidden">
-                  <div className="h-full bg-[#f5b642] w-[75%]" />
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between text-[#eaecef] mb-1">
-                  <span className="font-sans font-bold">ETH/USDT</span>
-                  <span className="text-[#0ecb81]">+$12k (Vol: $840k)</span>
-                </div>
-                <div className="w-full h-1.5 rounded-full bg-[#1b2028] overflow-hidden">
-                  <div className="h-full bg-[#3b82f6] w-[55%]" />
-                </div>
-              </div>
+              {topPairs.length === 0 ? (
+                <div className="text-[#5e6673] font-sans">Chưa có dữ liệu đặt lệnh.</div>
+              ) : (
+                topPairs.map(([sym, stat]) => {
+                  const pct = maxPairNotional.gt(0)
+                    ? Math.min(100, Math.max(8, stat.notional.div(maxPairNotional).mul(100).toNumber()))
+                    : 0;
+                  return (
+                    <div key={sym}>
+                      <div className="flex justify-between text-[#eaecef] mb-1">
+                        <span className="font-sans font-bold">{sym.replace('_', '/')}</span>
+                        <span className="text-[#0ecb81]">
+                          {stat.count} orders • ${stat.notional.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-[#1b2028] overflow-hidden">
+                        <div className="h-full bg-[#f5b642]" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
           <div className="flex items-center justify-between text-[11px] text-[#5e6673] pt-3 border-t border-[#1c212a] mt-4">
             <span className="flex items-center gap-1.5">
               <Activity className="w-3 h-3 text-[#0ecb81]" />
-              Match Engine Status: Operational (2ms Latency)
+              Order Sync: Real-time polling + WebSocket invalidation
             </span>
           </div>
         </div>

@@ -14,6 +14,7 @@ export interface StoredUser {
   fullName?: string | null;
   role: 'USER' | 'ADMIN' | 'SYSTEM';
   status?: 'ACTIVE' | 'LOCKED';
+  twoFactorEnabled?: boolean;
   createdAt?: string;
   lastLoginAt?: string | null;
 }

@@ -8,6 +8,7 @@ import { WalletsService } from './wallets.service';
 @UseGuards(JwtAuthGuard)
 export class WalletsController {
   constructor(private readonly walletsService: WalletsService) {}
+
   @Get()
   getWallets(
     @CurrentUser() user: AuthenticatedUser,

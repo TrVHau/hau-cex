@@ -20,10 +20,13 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { config } from 'dotenv';
-import { resolve } from 'path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-config({ path: resolve(__dirname, '../.env') });
+const rootEnvPath = resolve(__dirname, '../.env');
+if (existsSync(rootEnvPath)) {
+  process.loadEnvFile(rootEnvPath);
+}
 
 const API_BASE_URL = process.env.API_URL || 'http://localhost:3000/api/v1';
 const SYMBOL = 'BTC_USDT';
@@ -146,8 +149,8 @@ class BotClient {
 
   async cancelOrder(orderId: string): Promise<void> {
     await this.ensureAuth();
-    const res = await fetch(`${API_BASE_URL}/orders/${orderId}`, {
-      method: 'DELETE',
+    const res = await fetch(`${API_BASE_URL}/orders/${orderId}/cancel`, {
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${this.token}`,
       },
@@ -160,8 +163,8 @@ class BotClient {
     }
 
     if (!res.ok) {
-      // 404 / 400 means already executed or cancelled
-      if (res.status === 404 || res.status === 400) return;
+      // 404 / 400 / 422 means already executed, cancelled, or cancel-pending
+      if (res.status === 404 || res.status === 400 || res.status === 422) return;
       const errText = await res.text();
       console.warn(`[${this.name}] Cancel order ${orderId} failed: ${errText}`);
     }
@@ -287,8 +290,9 @@ async function main() {
             ? Math.abs(currentRefPrice - lastPlacedRefPrice) / lastPlacedRefPrice
             : 1.0;
 
-        // Fetch current active orders
-        const activeOrders = await mmClient.getActiveOrders(SYMBOL);
+        // Fetch current active orders (exclude orders already in CANCEL_PENDING)
+        const allActiveOrders = await mmClient.getActiveOrders(SYMBOL);
+        const activeOrders = allActiveOrders.filter((o) => o.status !== 'CANCEL_PENDING');
         const bids = activeOrders.filter((o) => o.side === 'BUY');
         const asks = activeOrders.filter((o) => o.side === 'SELL');
 

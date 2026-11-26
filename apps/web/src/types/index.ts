@@ -11,6 +11,7 @@ export interface User {
   fullName?: string | null;
   role: 'USER' | 'ADMIN' | 'SYSTEM';
   status?: 'ACTIVE' | 'LOCKED';
+  twoFactorEnabled?: boolean;
   createdAt?: string;
   lastLoginAt?: string | null;
 }
@@ -22,6 +23,7 @@ export interface UserProfile {
   fullName?: string | null;
   role: 'USER' | 'ADMIN' | 'SYSTEM';
   status: 'ACTIVE' | 'LOCKED';
+  twoFactorEnabled?: boolean;
   createdAt: string;
   lastLoginAt?: string | null;
 }
@@ -34,7 +36,7 @@ export interface UserSession {
 }
 
 // ─── Market ────────────────────────────────────────────────────────────────
-export type MarketStatus = 'OPEN' | 'SUSPENDED' | 'CLOSED';
+export type MarketStatus = 'READY' | 'SUSPENDED' | 'RECOVERING' | 'OPEN' | 'CLOSED';
 
 export interface Market {
   id: string;
@@ -45,9 +47,17 @@ export interface Market {
   makerFeeRate: string;
   takerFeeRate: string;
   tickSize: string;
+  stepSize?: string;
+  minQuantity?: string;
+  minNotional?: string;
   minOrderQty: string;
   basePrecision: number;
   quotePrecision: number;
+  pricePrecision?: number;
+  quantityPrecision?: number;
+  lastPrice: string | null;
+  bestBid: string | null;
+  bestAsk: string | null;
   ticker?: Ticker;
 }
 
@@ -98,6 +108,20 @@ export interface Trade {
   createdAt: string;
 }
 
+export interface OrderTrade {
+  id: string;
+  orderId?: string;
+  symbol?: string;
+  side?: TradeSide;
+  price: string;
+  quantity: string;
+  quoteAmount: string;
+  fee: string;
+  role: 'MAKER' | 'TAKER';
+  takerSide: string;
+  matchedAt: string;
+}
+
 // ─── Order ─────────────────────────────────────────────────────────────────
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'LIMIT' | 'MARKET';
@@ -106,6 +130,7 @@ export type OrderStatus =
   | 'OPEN'
   | 'PARTIALLY_FILLED'
   | 'FILLED'
+  | 'CANCEL_PENDING'
   | 'CANCELLED'
   | 'REJECTED';
 
@@ -131,7 +156,7 @@ export interface PlaceOrderRequest {
   quantity: string;
 }
 
-// ─── Wallet ────────────────────────────────────────────────────────────────
+// ─── Wallet & Ledger ───────────────────────────────────────────────────────
 export interface WalletBalance {
   asset: string;
   available: string;
@@ -140,20 +165,28 @@ export interface WalletBalance {
 }
 
 export type LedgerEntryType =
+  | 'INITIAL_BALANCE'
   | 'DEPOSIT'
   | 'WITHDRAWAL'
-  | 'TRADE_CREDIT'
-  | 'TRADE_DEBIT'
-  | 'FEE'
-  | 'LOCK'
-  | 'UNLOCK';
+  | 'INTERNAL_TRANSFER_IN'
+  | 'INTERNAL_TRANSFER_OUT'
+  | 'ORDER_LOCK'
+  | 'ORDER_UNLOCK'
+  | 'TRADE_SETTLEMENT'
+  | 'TRADING_FEE';
+
+export type LedgerBalanceType = 'AVAILABLE' | 'LOCKED';
 
 export interface LedgerEntry {
   id: string;
   asset: string;
   amount: string;
   entryType: LedgerEntryType;
+  balanceType: LedgerBalanceType;
+  beforeBalance: string;
   balanceAfter: string;
+  referenceType?: string;
+  referenceId?: string;
   createdAt: string;
   operationId: string;
 }
@@ -161,30 +194,143 @@ export interface LedgerEntry {
 // ─── Deposit ───────────────────────────────────────────────────────────────
 export type DepositStatus =
   | 'PENDING'
+  | 'DETECTED'
   | 'CONFIRMING'
   | 'CREDITED'
   | 'FAILED'
   | 'EXPIRED';
 
 export interface DepositIntent {
-  id: string;
+  depositId: string;
   asset: string;
-  depositAddress: string;
-  contractAddress: string;
-  chainId: number;
+  chainId: string;
+  tokenAddress: string;
+  vaultAddress: string;
+  accountReference: string;
   status: DepositStatus;
   amount: string | null;
-  txHash: string | null;
-  createdAt: string;
+  txHash?: string | null;
+  blockNumber?: string | null;
+  confirmationCount?: number;
   expiresAt: string;
+  creditedAt?: string | null;
+  createdAt: string;
 }
 
 export interface DepositConfig {
   asset: string;
-  contractAddress: string;
-  depositAddress: string;
-  chainId: number;
-  confirmationsRequired: number;
+  chainId: string;
+  tokenAddress: string;
+  vaultAddress: string;
+  requiredConfirmations: number;
+}
+
+export interface CreateDepositIntentRequest {
+  asset: string;
+  depositorAddress: string;
+}
+
+// ─── Withdrawals, Transfers, Security & Preferences ────────────────────────
+export type WithdrawalStatus = 'PENDING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface WithdrawalItem {
+  id: string;
+  assetSymbol: string;
+  toAddress: string;
+  amount: string;
+  fee: string;
+  status: WithdrawalStatus;
+  txHash?: string | null;
+  failureReason?: string | null;
+  processedAt?: string | null;
+  createdAt: string;
+}
+
+export interface CreateWithdrawalRequest {
+  assetSymbol: string;
+  toAddress: string;
+  amount: string;
+}
+
+export interface InternalTransferItem {
+  id: string;
+  assetSymbol: string;
+  senderEmail: string;
+  recipientEmail: string;
+  direction: 'IN' | 'OUT';
+  amount: string;
+  note?: string | null;
+  createdAt: string;
+}
+
+export interface CreateTransferRequest {
+  assetSymbol: string;
+  recipientEmail: string;
+  amount: string;
+  note?: string;
+}
+
+export type NotificationType = 'SECURITY' | 'WALLET' | 'ORDER' | 'SYSTEM';
+
+export interface UserNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface NotificationsResponse {
+  items: UserNotification[];
+  unreadCount: number;
+}
+
+export interface UserPreferences {
+  notifLogin: boolean;
+  notifOrders: boolean;
+  notifSecurity: boolean;
+  notifNewsletter: boolean;
+  baseCurrency: 'USDT' | 'USD' | 'VND';
+  language: 'en' | 'vi';
+  confirmOrder: boolean;
+  updatedAt?: string;
+}
+
+export type ApiKeyPermission = 'READ' | 'TRADE';
+
+export interface ApiKeyItem {
+  id: string;
+  label: string;
+  keyPrefix: string;
+  permissions: ApiKeyPermission;
+  lastUsedAt?: string | null;
+  revokedAt?: string | null;
+  createdAt: string;
+}
+
+export interface CreatedApiKey extends ApiKeyItem {
+  secretKey: string;
+}
+
+export interface TwoFactorSetupResponse {
+  secret: string;
+  otpauthUrl: string;
+}
+
+export interface AdminWithdrawalItem {
+  id: string;
+  userId: string;
+  userEmail: string;
+  assetSymbol: string;
+  toAddress: string;
+  amount: string;
+  fee: string;
+  status: WithdrawalStatus;
+  txHash?: string | null;
+  failureReason?: string | null;
+  processedAt?: string | null;
+  createdAt: string;
 }
 
 // ─── Admin ─────────────────────────────────────────────────────────────────

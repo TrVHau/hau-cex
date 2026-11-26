@@ -100,16 +100,36 @@ Before running the project, make sure you have:
 pnpm install
 ```
 
-### 2. Start infrastructure
+### 2. Start infrastructure (or full Docker stack)
 
 ```bash
-pnpm infra:up
+# Start all services quickly without rebuilding images (Postgres, Redis, Matching Engine, Backend API, Backend Worker, Web UI)
+pnpm start
+
+# Rebuild images and start (use after modifying code or Dockerfiles)
+pnpm start:build
 ```
 
-This starts the required services defined in [docker-compose.yml](docker-compose.yml):
+Or run the Compose command directly:
 
-- PostgreSQL
-- Redis
+```bash
+docker compose up -d
+```
+
+This starts all services defined in [docker-compose.yml](docker-compose.yml):
+
+- PostgreSQL (`5432`)
+- Redis (`6379`)
+- Matching Engine (Go)
+- Backend API (`3000`)
+- Backend Worker
+- Frontend Web (`5173`, served via Nginx)
+
+To start only database & Redis infrastructure for local development:
+
+```bash
+docker compose up -d postgres redis
+```
 
 ### 3. Configure environment variables
 
@@ -157,6 +177,13 @@ pnpm dev:web
 
 ```bash
 pnpm dev:engine
+```
+
+#### Trading Bot (Optional demo liquidity & live trades)
+
+```bash
+pnpm bot          # run Market Maker & Taker bots (Ctrl+C to stop)
+pnpm bot:clean    # cancel all active bot orders
 ```
 
 #### Smart contracts

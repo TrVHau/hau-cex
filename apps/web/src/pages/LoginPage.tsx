@@ -9,6 +9,8 @@ export function LoginPage() {
   const login = useLogin();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+  const [requires2fa, setRequires2fa] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -16,9 +18,22 @@ export function LoginPage() {
     setError(null);
 
     try {
-      await login.mutateAsync({ email, password });
+      await login.mutateAsync({
+        email,
+        password,
+        ...(requires2fa && totpCode.trim() ? { totpCode: totpCode.trim() } : {}),
+      });
       navigate('/markets');
     } catch (err) {
+      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
+      if (
+        data?.code === 'TWO_FACTOR_REQUIRED' ||
+        data?.message?.toLowerCase().includes('two-factor')
+      ) {
+        setRequires2fa(true);
+        setError('Tài khoản đang bật 2FA. Vui lòng nhập mã 6 chữ số từ Google Authenticator.');
+        return;
+      }
       setError(parseApiError(err));
     }
   };
@@ -58,6 +73,20 @@ export function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
+
+          {requires2fa && (
+            <Input
+              label="Mã xác thực 2FA (6 chữ số)"
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="123456"
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
+              required
+              autoFocus
+            />
+          )}
 
           <Button
             type="submit"

@@ -70,6 +70,9 @@ enum LedgerBalanceType {
 enum LedgerEntryType {
   INITIAL_BALANCE
   DEPOSIT
+  WITHDRAWAL
+  INTERNAL_TRANSFER_IN
+  INTERNAL_TRANSFER_OUT
   ORDER_LOCK
   ORDER_UNLOCK
   TRADE_SETTLEMENT
@@ -97,28 +100,61 @@ enum DepositStatus {
   @@map("deposit_status")
 }
 
+enum WithdrawalStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+
+  @@map("withdrawal_status")
+}
+
+enum NotificationType {
+  SECURITY
+  WALLET
+  ORDER
+  SYSTEM
+
+  @@map("notification_type")
+}
+
+enum ApiKeyPermission {
+  READ
+  TRADE
+
+  @@map("api_key_permission")
+}
+
 // Models
 
 model User {
-  id           String     @id(map: "pk_users") @default(uuid(7)) @db.Uuid
-  email        String     @unique(map: "uq_users_email") 
-  passwordHash String     @map("password_hash")
-  fullName     String?    @map("full_name") @db.VarChar(150)
-  role         UserRole   @default(USER)
-  status       UserStatus @default(ACTIVE)
-  lockedAt     DateTime?  @map("locked_at") @db.Timestamptz(6)
-  lockedReason String?    @map("locked_reason")
-  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(6)
-  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String     @id(map: "pk_users") @default(uuid(7)) @db.Uuid
+  email            String     @unique(map: "uq_users_email") 
+  passwordHash     String     @map("password_hash")
+  fullName         String?    @map("full_name") @db.VarChar(150)
+  role             UserRole   @default(USER)
+  status           UserStatus @default(ACTIVE)
+  twoFactorEnabled Boolean    @default(false) @map("two_factor_enabled")
+  twoFactorSecret  String?    @map("two_factor_secret") @db.VarChar(128)
+  lockedAt         DateTime?  @map("locked_at") @db.Timestamptz(6)
+  lockedReason     String?    @map("locked_reason")
+  lastLoginAt      DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sessions      Session[]
-  wallets       Wallet[]
-  ledgerEntries LedgerEntry[]
-  orders        Order[]
-  deposits      Deposit[]
-  buyerTrades   Trade[]       @relation("BuyerUser")
-  sellerTrades  Trade[]       @relation("SellerUser")
+  sessions          Session[]
+  wallets           Wallet[]
+  ledgerEntries     LedgerEntry[]
+  orders            Order[]
+  deposits          Deposit[]
+  withdrawals       Withdrawal[]
+  sentTransfers     InternalTransfer[] @relation("TransferSender")
+  receivedTransfers InternalTransfer[] @relation("TransferRecipient")
+  preference        UserPreference?
+  notifications     Notification[]
+  apiKeys           ApiKey[]
+  buyerTrades       Trade[]            @relation("BuyerUser")
+  sellerTrades      Trade[]            @relation("SellerUser")
 
   @@map("users")
 }
@@ -149,12 +185,14 @@ model Asset {
   createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  baseTradingPairs  TradingPair[] @relation("BaseAsset")
-  quoteTradingPairs TradingPair[] @relation("QuoteAsset")
+  baseTradingPairs  TradingPair[]      @relation("BaseAsset")
+  quoteTradingPairs TradingPair[]      @relation("QuoteAsset")
   wallets           Wallet[]
   ledgerEntries     LedgerEntry[]
-  lockedOrders      Order[]       @relation("LockedAsset")
+  lockedOrders      Order[]            @relation("LockedAsset")
   deposits          Deposit[]
+  withdrawals       Withdrawal[]
+  transfers         InternalTransfer[]
 
   @@map("assets")
 }
@@ -395,4 +433,94 @@ model Deposit {
   @@index([userId, createdAt(sort: Desc)], map: "idx_deposits_user_created")
   @@index([status, expiresAt], map: "idx_deposits_status_expires")
   @@map("deposits")
+}
+
+// ─── Withdrawals, Transfers, Security & Preferences ─────────────────────────
+
+model Withdrawal {
+  id            String           @id(map: "pk_withdrawals") @default(uuid(7)) @db.Uuid
+  userId        String           @map("user_id") @db.Uuid
+  assetId       String           @map("asset_id") @db.Uuid
+  toAddress     String           @map("to_address") @db.VarChar(42)
+  amount        Decimal          @db.Decimal(38, 18)
+  fee           Decimal          @default(0) @db.Decimal(38, 18)
+  status        WithdrawalStatus @default(PENDING)
+  txHash        String?          @map("tx_hash") @db.VarChar(66)
+  failureReason String?          @map("failure_reason")
+  processedAt   DateTime?        @map("processed_at") @db.Timestamptz(6)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict, map: "fk_withdrawals_user")
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict, map: "fk_withdrawals_asset")
+
+  @@index([userId, createdAt(sort: Desc)], map: "idx_withdrawals_user_created")
+  @@index([status, createdAt(sort: Desc)], map: "idx_withdrawals_status_created")
+  @@map("withdrawals")
+}
+
+model InternalTransfer {
+  id              String   @id(map: "pk_internal_transfers") @default(uuid(7)) @db.Uuid
+  senderUserId    String   @map("sender_user_id") @db.Uuid
+  recipientUserId String   @map("recipient_user_id") @db.Uuid
+  assetId         String   @map("asset_id") @db.Uuid
+  amount          Decimal  @db.Decimal(38, 18)
+  note            String?  @db.VarChar(255)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  sender    User  @relation("TransferSender", fields: [senderUserId], references: [id], onDelete: Restrict, map: "fk_internal_transfers_sender")
+  recipient User  @relation("TransferRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict, map: "fk_internal_transfers_recipient")
+  asset     Asset @relation(fields: [assetId], references: [id], onDelete: Restrict, map: "fk_internal_transfers_asset")
+
+  @@index([senderUserId, createdAt(sort: Desc)], map: "idx_transfers_sender_created")
+  @@index([recipientUserId, createdAt(sort: Desc)], map: "idx_transfers_recipient_created")
+  @@map("internal_transfers")
+}
+
+model UserPreference {
+  userId          String   @id(map: "pk_user_preferences") @map("user_id") @db.Uuid
+  notifLogin      Boolean  @default(true) @map("notif_login")
+  notifOrders     Boolean  @default(true) @map("notif_orders")
+  notifSecurity   Boolean  @default(true) @map("notif_security")
+  notifNewsletter Boolean  @default(false) @map("notif_newsletter")
+  baseCurrency    String   @default("USDT") @map("base_currency") @db.VarChar(10)
+  language        String   @default("en") @db.VarChar(10)
+  confirmOrder    Boolean  @default(true) @map("confirm_order")
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, map: "fk_user_preferences_user")
+
+  @@map("user_preferences")
+}
+
+model Notification {
+  id        String           @id(map: "pk_notifications") @default(uuid(7)) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType @default(SYSTEM)
+  title     String           @db.VarChar(150)
+  message   String
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, map: "fk_notifications_user")
+
+  @@index([userId, createdAt(sort: Desc)], map: "idx_notifications_user_created")
+  @@map("notifications")
+}
+
+model ApiKey {
+  id          String           @id(map: "pk_api_keys") @default(uuid(7)) @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  label       String           @db.VarChar(80)
+  keyPrefix   String           @map("key_prefix") @db.VarChar(24)
+  keyHash     String           @unique(map: "uq_api_keys_hash") @map("key_hash") @db.VarChar(128)
+  permissions ApiKeyPermission @default(READ)
+  lastUsedAt  DateTime?        @map("last_used_at") @db.Timestamptz(6)
+  revokedAt   DateTime?        @map("revoked_at") @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, map: "fk_api_keys_user")
+
+  @@index([userId, createdAt(sort: Desc)], map: "idx_api_keys_user_created")
+  @@map("api_keys")
 }

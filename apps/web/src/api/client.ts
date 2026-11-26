@@ -59,7 +59,14 @@ apiClient.interceptors.response.use(
     if (!axios.isAxiosError(error)) return Promise.reject(error);
 
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    const reqUrl = originalRequest?.url ?? '';
+    const skipAutoRedirect =
+      reqUrl.includes('/auth/login') ||
+      reqUrl.includes('/auth/register') ||
+      reqUrl.includes('/auth/2fa/') ||
+      reqUrl.includes('/auth/change-password');
+
+    if (error.response?.status === 401 && !originalRequest._retry && !skipAutoRedirect) {
       const refreshToken = authStore.getRefreshToken();
       if (!refreshToken) {
         authStore.clear();

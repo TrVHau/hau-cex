@@ -1,10 +1,21 @@
 import apiClient from './client';
 import { authStore } from '../store/authStore';
-import type { AuthTokens, UserProfile, UserSession } from '../types';
+import type {
+  ApiKeyItem,
+  ApiKeyPermission,
+  AuthTokens,
+  CreatedApiKey,
+  NotificationsResponse,
+  TwoFactorSetupResponse,
+  UserPreferences,
+  UserProfile,
+  UserSession,
+} from '../types';
 
 export interface LoginRequest {
   email: string;
   password: string;
+  totpCode?: string;
 }
 
 export interface RegisterRequest {
@@ -92,6 +103,64 @@ export const authApi = {
 
   async revokeAllOtherSessions(): Promise<{ message: string; count: number }> {
     const res = await apiClient.delete<{ message: string; count: number }>('/auth/sessions');
+    return res.data;
+  },
+
+  // 2FA (TOTP)
+  async setup2fa(): Promise<TwoFactorSetupResponse> {
+    const res = await apiClient.post<TwoFactorSetupResponse>('/auth/2fa/setup');
+    return res.data;
+  },
+
+  async verify2fa(code: string): Promise<{ twoFactorEnabled: boolean }> {
+    const res = await apiClient.post<{ twoFactorEnabled: boolean }>('/auth/2fa/verify', { code });
+    return res.data;
+  },
+
+  async disable2fa(payload: { password?: string; code?: string }): Promise<{ twoFactorEnabled: boolean }> {
+    const res = await apiClient.post<{ twoFactorEnabled: boolean }>('/auth/2fa/disable', payload);
+    return res.data;
+  },
+
+  // Preferences
+  async getPreferences(): Promise<UserPreferences> {
+    const res = await apiClient.get<UserPreferences>('/auth/preferences');
+    return res.data;
+  },
+
+  async updatePreferences(data: Partial<UserPreferences>): Promise<UserPreferences> {
+    const res = await apiClient.patch<UserPreferences>('/auth/preferences', data);
+    return res.data;
+  },
+
+  // Notifications
+  async getNotifications(): Promise<NotificationsResponse> {
+    const res = await apiClient.get<NotificationsResponse>('/auth/notifications');
+    return res.data;
+  },
+
+  async markNotificationRead(id: string): Promise<void> {
+    await apiClient.patch(`/auth/notifications/${id}/read`);
+  },
+
+  async markAllNotificationsRead(): Promise<{ updatedCount: number }> {
+    const res = await apiClient.post<{ updatedCount: number }>('/auth/notifications/read-all');
+    return res.data;
+  },
+
+  // API Keys
+  async getApiKeys(): Promise<ApiKeyItem[]> {
+    const res = await apiClient.get<ApiKeyItem[]>('/auth/api-keys');
+    return res.data;
+  },
+
+  async createApiKey(data: { label: string; permissions?: ApiKeyPermission }): Promise<CreatedApiKey> {
+    const res = await apiClient.post<CreatedApiKey>('/auth/api-keys', data);
+    return res.data;
+  },
+
+  async revokeApiKey(id: string): Promise<{ message: string }> {
+    const res = await apiClient.delete<{ message: string }>(`/auth/api-keys/${id}`);
     return res.data;
   },
 };

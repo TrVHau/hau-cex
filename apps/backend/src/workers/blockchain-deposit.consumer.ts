@@ -7,8 +7,8 @@ import {
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { PrismaService } from '../core/prisma/prisma.service';
+import { Prisma } from '../generated/prisma';
 import { DepositCreditService } from '../modules/deposits/deposit-credit.service';
-import { Decimal } from 'decimal.js';
 
 const STREAM = 'stream:blockchain:events';
 const GROUP = 'blockchain-deposit-v1';
@@ -209,8 +209,8 @@ export class BlockchainDepositConsumer
         const dep = deposits[0];
         if (!dep || dep.status !== 'PENDING') return;
 
-        const amount = new Decimal(p.amountRaw).div(
-          new Decimal(10).pow(dep.asset_decimals),
+        const amount = new Prisma.Decimal(p.amountRaw).div(
+          new Prisma.Decimal(10).pow(dep.asset_decimals),
         );
         const newStatus =
           requiredConfirmations <= 1 ? 'CONFIRMING' : 'DETECTED';

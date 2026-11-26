@@ -67,7 +67,6 @@ export class WalletsService {
     );
   }
 
-  // tra cứu ví nội bộ (throw lỗi nếu o thấy )
   async findWalletOrThrow(
     userId: string,
     assetSymbol: string,
@@ -91,7 +90,6 @@ export class WalletsService {
     return wallet;
   }
 
-  // tra cứu ví bằng asset
   async findWalletByAssetId(userId: string, assetId: string): Promise<Wallet> {
     const wallet = await this.prisma.wallet.findUnique({
       where: { userId_assetId: { userId, assetId } },
@@ -104,7 +102,6 @@ export class WalletsService {
     return wallet;
   }
 
-  //private mapping helper
   private toWalletResponseDto(wallet: WalletWithAsset): WalletResponseDto {
     const available = wallet.availableBalance;
     const locked = wallet.lockedBalance;
