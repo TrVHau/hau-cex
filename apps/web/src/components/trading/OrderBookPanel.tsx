@@ -7,6 +7,7 @@ interface Props {
   symbol: string;
   tickSize: string;
   basePrecision: number;
+  onSelectPrice?: (price: string) => void;
 }
 
 interface NormalizedLevel {
@@ -51,7 +52,7 @@ function calculateTotal(price: string, qty: string): string {
   }
 }
 
-export function OrderBookPanel({ symbol, tickSize, basePrecision }: Props) {
+export function OrderBookPanel({ symbol, tickSize, basePrecision, onSelectPrice }: Props) {
   const { data: orderBook, isLoading } = useOrderBook(symbol);
 
   if (isLoading && !orderBook) {
@@ -82,7 +83,7 @@ export function OrderBookPanel({ symbol, tickSize, basePrecision }: Props) {
 
   const bestAsk = normalizedAsks[0]?.price;
   const bestBid = normalizedBids[0]?.price;
-  const midPrice = bestBid ?? bestAsk ?? '60000.00';
+  const midPrice = bestBid ?? bestAsk ?? null;
 
   let spread = '0.0';
   let spreadPct = '0.00%';
@@ -131,6 +132,8 @@ export function OrderBookPanel({ symbol, tickSize, basePrecision }: Props) {
               return (
                 <div
                   key={`ask-${idx}`}
+                  onClick={() => onSelectPrice?.(level.price)}
+                  title="Click để chọn mức giá này"
                   className="relative grid grid-cols-3 px-1 py-0.5 hover:bg-[#1e232d] transition-colors rounded-sm cursor-pointer"
                 >
                   <div
@@ -155,9 +158,9 @@ export function OrderBookPanel({ symbol, tickSize, basePrecision }: Props) {
           <div className="my-1.5 py-1.5 px-2 bg-[#1b2028] border-y border-[#232933] flex items-center justify-between rounded">
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-[#0ecb81]">
-                ${formatPrice(midPrice, tickSize)}
+                {midPrice ? `$${formatPrice(midPrice, tickSize)}` : '—'}
               </span>
-              <span className="text-[11px] text-[#0ecb81]">↗</span>
+              {midPrice && <span className="text-[11px] text-[#0ecb81]">↗</span>}
             </div>
             <div className="text-[10px] text-[#848e9c]">
               Spread {spread} ({spreadPct})
@@ -172,6 +175,8 @@ export function OrderBookPanel({ symbol, tickSize, basePrecision }: Props) {
               return (
                 <div
                   key={`bid-${idx}`}
+                  onClick={() => onSelectPrice?.(level.price)}
+                  title="Click để chọn mức giá này"
                   className="relative grid grid-cols-3 px-1 py-0.5 hover:bg-[#1e232d] transition-colors rounded-sm cursor-pointer"
                 >
                   <div

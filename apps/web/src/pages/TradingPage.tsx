@@ -1,18 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Search,
   Maximize2,
+  Minimize2,
   SlidersHorizontal,
+  Star,
 } from 'lucide-react';
-import { useMarket, useMarkets, useWallets, useTicker } from '../hooks/useApi';
+import { useMarket, useMarkets, useWallets, useTicker, useFavoriteMarkets } from '../hooks/useApi';
 import { useMarketSocket } from '../hooks/useWebSocket';
 import { OrderBookPanel } from '../components/trading/OrderBookPanel';
 import { RecentTradesPanel } from '../components/trading/RecentTradesPanel';
 import { OrderFormPanel } from '../components/trading/OrderFormPanel';
 import { ActiveOrdersPanel } from '../components/trading/ActiveOrdersPanel';
 import { CandlestickChart } from '../components/trading/CandlestickChart';
-import { Spinner } from '../components/ui';
+import { Spinner, CoinIcon, PairIcon } from '../components/ui';
 import { formatPrice } from '../lib/utils';
 
 export function TradingPage() {
@@ -24,13 +26,26 @@ export function TradingPage() {
   const { data: balances = [] } = useWallets();
   const { data: ticker } = useTicker(symbol);
 
-  // Timeframe state
+  // Timeframe & terminal UI state
   const [timeframe, setTimeframe] = useState<'1M' | '5M' | '15M' | '1H' | '4H' | '1D' | '1W'>('15M');
   const [marketTab, setMarketTab] = useState<'SPOT' | 'FAVORITES'>('SPOT');
   const [marketSearch, setMarketSearch] = useState('');
+  const [selectedPrice, setSelectedPrice] = useState<{ price: string; seq: number } | null>(null);
+  const [isChartFullscreen, setIsChartFullscreen] = useState(false);
+
+  const { favorites, toggleFavorite } = useFavoriteMarkets();
 
   // Connect WebSocket cho market
   useMarketSocket(symbol);
+
+  useEffect(() => {
+    if (!isChartFullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsChartFullscreen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isChartFullscreen]);
 
   if (loadingMarket) {
     return (
@@ -54,14 +69,21 @@ export function TradingPage() {
     );
   }
 
-  const lastPrice = ticker?.lastPrice ?? market.ticker?.lastPrice ?? '64231.50';
-  const change24h = parseFloat(ticker?.priceChange24h ?? '2.45');
-  const isPositive = change24h >= 0;
+  const lastPrice = ticker?.lastPrice ?? market.lastPrice ?? market.ticker?.lastPrice ?? null;
+  const rawChange24h = ticker?.priceChange24h ?? market.ticker?.priceChange24h ?? null;
+  const change24h = rawChange24h !== null ? parseFloat(rawChange24h) : null;
+  const isPositive = change24h !== null && change24h >= 0;
+  const isCurrentFav = favorites.includes(market.symbol);
 
-  const filteredMiniMarkets = allMarkets.filter((m) =>
-    m.symbol.toLowerCase().includes(marketSearch.toLowerCase()) ||
-    m.baseAsset.toLowerCase().includes(marketSearch.toLowerCase())
-  );
+  const filteredMiniMarkets = allMarkets.filter((m) => {
+    if (marketTab === 'FAVORITES' && !favorites.includes(m.symbol)) {
+      return false;
+    }
+    return (
+      m.symbol.toLowerCase().includes(marketSearch.toLowerCase()) ||
+      m.baseAsset.toLowerCase().includes(marketSearch.toLowerCase())
+    );
+  });
 
   return (
     <div className="p-3 sm:p-4 space-y-3 bg-[#0b0e11] min-h-screen text-[#eaecef]">
@@ -70,9 +92,15 @@ export function TradingPage() {
         {/* Left: Pair Info & Price */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-[#f5b642] flex items-center justify-center text-black font-black text-xs shadow-sm">
-              ⚡
-            </div>
+            <button
+              type="button"
+              onClick={() => toggleFavorite(market.symbol)}
+              className="text-[#5e6673] hover:text-[#f5b642] cursor-pointer"
+              title={isCurrentFav ? 'Bỏ yêu thích' : 'Thêm vào yêu thích'}
+            >
+              <Star className={`w-4 h-4 ${isCurrentFav ? 'fill-[#f5b642] text-[#f5b642]' : ''}`} />
+            </button>
+            <PairIcon baseAsset={market.baseAsset} quoteAsset={market.quoteAsset} size="lg" />
             <div>
               <div className="text-sm font-bold text-white flex items-center gap-1.5">
                 {market.baseAsset}/{market.quoteAsset}
@@ -87,9 +115,11 @@ export function TradingPage() {
           {/* Big Price */}
           <div>
             <div className="text-lg font-black font-numeric text-[#0ecb81] tracking-tight">
-              {formatPrice(lastPrice, market.tickSize)}
+              {lastPrice ? formatPrice(lastPrice, market.tickSize) : '—'}
             </div>
-            <div className="text-[10px] text-[#848e9c] font-numeric">${formatPrice(lastPrice, market.tickSize)}</div>
+            <div className="text-[10px] text-[#848e9c] font-numeric">
+              {lastPrice ? `$${formatPrice(lastPrice, market.tickSize)}` : 'No trades yet'}
+            </div>
           </div>
         </div>
 
@@ -97,23 +127,40 @@ export function TradingPage() {
         <div className="flex items-center gap-5 text-xs font-numeric overflow-x-auto py-1">
           <div>
             <div className="text-[10px] text-[#5e6673] font-sans">24H CHANGE</div>
-            <div className={`font-semibold ${isPositive ? 'text-[#0ecb81]' : 'text-[#f6465d]'}`}>
-              {isPositive ? '+' : ''}
-              {change24h.toFixed(2)}%
+            <div
+              className={`font-semibold ${
+                change24h === null || Number.isNaN(change24h)
+                  ? 'text-[#848e9c]'
+                  : isPositive
+                    ? 'text-[#0ecb81]'
+                    : 'text-[#f6465d]'
+              }`}
+            >
+              {change24h === null || Number.isNaN(change24h)
+                ? '—'
+                : `${isPositive ? '+' : ''}${change24h.toFixed(2)}%`}
             </div>
           </div>
 
           <div>
             <div className="text-[10px] text-[#5e6673] font-sans">24H HIGH</div>
             <div className="text-white font-medium">
-              {ticker?.high24h ? formatPrice(ticker.high24h, market.tickSize) : formatPrice(lastPrice, market.tickSize)}
+              {ticker?.high24h
+                ? formatPrice(ticker.high24h, market.tickSize)
+                : lastPrice
+                  ? formatPrice(lastPrice, market.tickSize)
+                  : '—'}
             </div>
           </div>
 
           <div>
             <div className="text-[10px] text-[#5e6673] font-sans">24H LOW</div>
             <div className="text-white font-medium">
-              {ticker?.low24h ? formatPrice(ticker.low24h, market.tickSize) : formatPrice(lastPrice, market.tickSize)}
+              {ticker?.low24h
+                ? formatPrice(ticker.low24h, market.tickSize)
+                : lastPrice
+                  ? formatPrice(lastPrice, market.tickSize)
+                  : '—'}
             </div>
           </div>
 
@@ -129,7 +176,7 @@ export function TradingPage() {
             <div className="text-white font-medium">
               ${ticker?.quoteVolume24h
                 ? Number(ticker.quoteVolume24h).toLocaleString('en-US', { maximumFractionDigits: 0 })
-                : (Number(ticker?.baseVolume24h ?? 0) * Number(lastPrice)).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                : (Number(ticker?.baseVolume24h ?? 0) * Number(lastPrice ?? 0)).toLocaleString('en-US', { maximumFractionDigits: 0 })}
             </div>
           </div>
         </div>
@@ -174,42 +221,89 @@ export function TradingPage() {
 
             {/* Markets Table */}
             <div className="space-y-1 overflow-y-auto max-h-[380px] lg:max-h-[560px]">
-              {filteredMiniMarkets.map((m) => {
-                const isSelected = m.symbol === market.symbol;
-                const mPrice = m.ticker?.lastPrice ? formatPrice(m.ticker.lastPrice, m.tickSize) : '64,231.50';
-                const mChange = parseFloat(m.ticker?.priceChange24h ?? '2.45');
-                const mPos = mChange >= 0;
+              {filteredMiniMarkets.length === 0 ? (
+                <div className="py-8 text-center text-xs text-[#5e6673]">
+                  {marketTab === 'FAVORITES' ? 'Chưa có cặp yêu thích.' : 'Không tìm thấy cặp phù hợp.'}
+                </div>
+              ) : (
+                filteredMiniMarkets.map((m) => {
+                  const isSelected = m.symbol === market.symbol;
+                  const mLastPrice = m.lastPrice ?? m.ticker?.lastPrice;
+                  const mPrice = mLastPrice ? formatPrice(mLastPrice, m.tickSize) : '—';
+                  const rawMChange = m.ticker?.priceChange24h;
+                  const mChange =
+                    rawMChange !== null && rawMChange !== undefined ? parseFloat(rawMChange) : null;
+                  const mPos = mChange !== null && mChange >= 0;
+                  const isFav = favorites.includes(m.symbol);
 
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => navigate(`/trade/${m.symbol}`)}
-                    className={`flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-colors ${
-                      isSelected
-                        ? 'bg-[#1e232d] border border-[#2b3240] text-[#f5b642]'
-                        : 'hover:bg-[#1a1e26] text-[#eaecef]'
-                    }`}
-                  >
-                    <div>
-                      <div className="font-bold">{m.baseAsset}/{m.quoteAsset}</div>
-                    </div>
-                    <div className="text-right font-numeric">
-                      <div className="font-semibold">{mPrice}</div>
-                      <div className={`text-[10px] ${mPos ? 'text-[#0ecb81]' : 'text-[#f6465d]'}`}>
-                        {mPos ? '+' : ''}{mChange.toFixed(2)}%
+                  return (
+                    <div
+                      key={m.id}
+                      onClick={() => navigate(`/trade/${m.symbol}`)}
+                      className={`flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-colors ${
+                        isSelected
+                          ? 'bg-[#1e232d] border border-[#2b3240] text-[#f5b642]'
+                          : 'hover:bg-[#1a1e26] text-[#eaecef]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleFavorite(m.symbol);
+                          }}
+                          className="text-[#5e6673] hover:text-[#f5b642] cursor-pointer shrink-0"
+                        >
+                          <Star className={`w-3 h-3 ${isFav ? 'fill-[#f5b642] text-[#f5b642]' : ''}`} />
+                        </button>
+                        <CoinIcon symbol={m.baseAsset} size="xs" />
+                        <div className="leading-tight min-w-0">
+                          <div className="font-bold text-[11px]">{m.baseAsset}</div>
+                          <div className="text-[9px] text-[#5e6673]">/{m.quoteAsset}</div>
+                        </div>
+                      </div>
+                      <div className="text-right font-numeric shrink-0 ml-1 text-[11px]">
+                        <div className="font-semibold">{mPrice}</div>
+                        <div
+                          className={`text-[10px] ${
+                            mChange === null || Number.isNaN(mChange)
+                              ? 'text-[#848e9c]'
+                              : mPos
+                                ? 'text-[#0ecb81]'
+                                : 'text-[#f6465d]'
+                          }`}
+                        >
+                          {mChange === null || Number.isNaN(mChange)
+                            ? '—'
+                            : `${mPos ? '+' : ''}${mChange.toFixed(2)}%`}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
 
         {/* Center Column: Chart + Order Form + Active Orders (col-span-12 lg:col-span-8 xl:col-span-7) */}
         <div className="col-span-12 lg:col-span-8 xl:col-span-7 space-y-3">
+          {isChartFullscreen && (
+            <div
+              className="fixed inset-0 bg-black/75 z-40"
+              onClick={() => setIsChartFullscreen(false)}
+            />
+          )}
+
           {/* Candlestick Chart Card */}
-          <div className="bg-[#14171d] border border-[#232933] rounded-xl p-3.5 flex flex-col justify-between overflow-hidden">
+          <div
+            className={
+              isChartFullscreen
+                ? 'fixed inset-4 z-50 bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between shadow-2xl overflow-hidden'
+                : 'bg-[#14171d] border border-[#232933] rounded-xl p-3.5 flex flex-col justify-between overflow-hidden'
+            }
+          >
             {/* Chart Toolbar */}
             <div className="flex items-center justify-between border-b border-[#232933] pb-2.5 mb-2">
               {/* Timeframe buttons */}
@@ -231,11 +325,24 @@ export function TradingPage() {
 
               {/* Tools */}
               <div className="flex items-center gap-2 text-[#848e9c]">
-                <button className="p-1 hover:text-white cursor-pointer" title="Indicators">
+                <span
+                  className="p-1 text-[#5e6673] cursor-default inline-flex items-center gap-1 text-[10px]"
+                  title="MA(7) & MA(25) overlays enabled"
+                >
                   <SlidersHorizontal className="w-3.5 h-3.5" />
-                </button>
-                <button className="p-1 hover:text-white cursor-pointer" title="Fullscreen">
-                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>MA 7/25</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsChartFullscreen((prev) => !prev)}
+                  className="p-1 hover:text-white cursor-pointer"
+                  title={isChartFullscreen ? 'Thu nhỏ (Esc)' : 'Phóng to biểu đồ'}
+                >
+                  {isChartFullscreen ? (
+                    <Minimize2 className="w-3.5 h-3.5 text-[#f5b642]" />
+                  ) : (
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  )}
                 </button>
               </div>
             </div>
@@ -244,13 +351,13 @@ export function TradingPage() {
             <CandlestickChart
               symbol={symbol}
               timeframe={timeframe}
-              currentPrice={lastPrice}
+              currentPrice={lastPrice ?? ''}
               tickSize={market.tickSize}
             />
           </div>
 
           {/* Side-by-Side Order Form */}
-          <OrderFormPanel market={market} balances={balances} />
+          <OrderFormPanel market={market} balances={balances} selectedPrice={selectedPrice} />
 
           {/* Active Orders Panel with Tabs */}
           <ActiveOrdersPanel
@@ -266,6 +373,9 @@ export function TradingPage() {
             symbol={market.symbol}
             tickSize={market.tickSize}
             basePrecision={market.basePrecision}
+            onSelectPrice={(price) =>
+              setSelectedPrice((prev) => ({ price, seq: (prev?.seq ?? 0) + 1 }))
+            }
           />
           <RecentTradesPanel
             symbol={market.symbol}

@@ -8,6 +8,7 @@ import Decimal from 'decimal.js';
 interface Props {
   market: Market;
   balances: WalletBalance[];
+  selectedPrice?: { price: string; seq: number } | null;
 }
 
 function getAvailable(balances: WalletBalance[], asset: string): string {
@@ -15,19 +16,41 @@ function getAvailable(balances: WalletBalance[], asset: string): string {
   return b?.available ?? '0';
 }
 
-export function OrderFormPanel({ market, balances }: Props) {
+export function OrderFormPanel({ market, balances, selectedPrice }: Props) {
   const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET' | 'STOP_LIMIT'>('LIMIT');
 
   // Buy form state
-  const [buyPrice, setBuyPrice] = useState(market.ticker?.lastPrice ?? '64231.50');
+  const [buyPrice, setBuyPrice] = useState(
+    market.lastPrice ?? market.bestAsk ?? market.ticker?.lastPrice ?? '',
+  );
   const [buyQty, setBuyQty] = useState('');
 
   // Sell form state
-  const [sellPrice, setSellPrice] = useState(market.ticker?.lastPrice ?? '64231.50');
+  const [sellPrice, setSellPrice] = useState(
+    market.lastPrice ?? market.bestBid ?? market.ticker?.lastPrice ?? '',
+  );
   const [sellQty, setSellQty] = useState('');
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const [prevMarketSymbol, setPrevMarketSymbol] = useState(market.symbol);
+  if (prevMarketSymbol !== market.symbol) {
+    setPrevMarketSymbol(market.symbol);
+    setBuyPrice(market.lastPrice ?? market.bestAsk ?? market.ticker?.lastPrice ?? '');
+    setSellPrice(market.lastPrice ?? market.bestBid ?? market.ticker?.lastPrice ?? '');
+    setBuyQty('');
+    setSellQty('');
+    setError(null);
+    setSuccess(null);
+  }
+
+  const [prevPriceSeq, setPrevPriceSeq] = useState(selectedPrice?.seq ?? 0);
+  if (selectedPrice && selectedPrice.seq !== prevPriceSeq) {
+    setPrevPriceSeq(selectedPrice.seq);
+    setBuyPrice(selectedPrice.price);
+    setSellPrice(selectedPrice.price);
+  }
 
   const placeOrder = usePlaceOrder();
 
@@ -57,6 +80,10 @@ export function OrderFormPanel({ market, balances }: Props) {
 
   const handleBuySubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (orderType !== 'LIMIT') {
+      setError('Backend hiện tại chỉ hỗ trợ đặt lệnh Limit.');
+      return;
+    }
     setError(null);
     setSuccess(null);
     try {
@@ -76,6 +103,10 @@ export function OrderFormPanel({ market, balances }: Props) {
 
   const handleSellSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (orderType !== 'LIMIT') {
+      setError('Backend hiện tại chỉ hỗ trợ đặt lệnh Limit.');
+      return;
+    }
     setError(null);
     setSuccess(null);
     try {
@@ -112,11 +143,20 @@ export function OrderFormPanel({ market, balances }: Props) {
             </button>
           ))}
         </div>
-        <div className="text-[11px] text-[#5e6673]">Trading Fees: 0.1%</div>
+        <div className="text-[11px] text-[#5e6673] font-numeric">
+          Maker {(Number(market.makerFeeRate || 0) * 100).toFixed(2)}% • Taker {(Number(market.takerFeeRate || 0) * 100).toFixed(2)}%
+        </div>
       </div>
 
       {error && <Alert type="error" message={error} onClose={() => setError(null)} className="mb-3" />}
       {success && <Alert type="success" message={success} onClose={() => setSuccess(null)} className="mb-3" />}
+      {orderType !== 'LIMIT' && (
+        <Alert
+          type="warning"
+          message={`Loại lệnh ${orderType === 'MARKET' ? 'Market' : 'Stop Limit'} chưa được backend hỗ trợ. Vui lòng chọn Limit để đặt lệnh.`}
+          className="mb-3"
+        />
+      )}
 
       {/* Side-by-Side Buy and Sell Columns */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -168,6 +208,7 @@ export function OrderFormPanel({ market, balances }: Props) {
             variant="buy"
             size="md"
             isLoading={placeOrder.isPending}
+            disabled={orderType !== 'LIMIT'}
             className="w-full mt-2 font-bold tracking-wide"
           >
             BUY {market.baseAsset}
@@ -222,6 +263,7 @@ export function OrderFormPanel({ market, balances }: Props) {
             variant="sell"
             size="md"
             isLoading={placeOrder.isPending}
+            disabled={orderType !== 'LIMIT'}
             className="w-full mt-2 font-bold tracking-wide"
           >
             SELL {market.baseAsset}

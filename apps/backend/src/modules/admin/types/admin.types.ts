@@ -84,3 +84,18 @@ export interface AdminTreasuryLedgerItem {
   operationId: string;
   createdAt: string;
 }
+
+export interface AdminWithdrawalItem {
+  id: string;
+  userId: string;
+  userEmail: string;
+  assetSymbol: string;
+  toAddress: string;
+  amount: string;
+  fee: string;
+  status: string;
+  txHash: string | null;
+  failureReason: string | null;
+  processedAt: string | null;
+  createdAt: string;
+}

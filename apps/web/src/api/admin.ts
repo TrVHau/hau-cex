@@ -5,7 +5,9 @@ import type {
   AdminMarket,
   AdminTreasuryOverview,
   AdminTreasuryLedgerItem,
+  AdminWithdrawalItem,
   CursorPaginatedResponse,
+  WithdrawalStatus,
 } from '../types';
 
 export const adminApi = {
@@ -81,6 +83,35 @@ export const adminApi = {
     const res = await apiClient.get<CursorPaginatedResponse<AdminTreasuryLedgerItem>>(
       '/admin/treasury/ledger',
       { params },
+    );
+    return res.data;
+  },
+
+  // Withdrawals
+  async getWithdrawals(params?: {
+    status?: WithdrawalStatus;
+    cursor?: string;
+    limit?: number;
+  }): Promise<CursorPaginatedResponse<AdminWithdrawalItem>> {
+    const res = await apiClient.get<CursorPaginatedResponse<AdminWithdrawalItem>>(
+      '/admin/withdrawals',
+      { params },
+    );
+    return res.data;
+  },
+
+  async completeWithdrawal(id: string, txHash?: string): Promise<AdminWithdrawalItem> {
+    const res = await apiClient.post<AdminWithdrawalItem>(
+      `/admin/withdrawals/${id}/complete`,
+      txHash ? { txHash } : {},
+    );
+    return res.data;
+  },
+
+  async rejectWithdrawal(id: string, reason?: string): Promise<AdminWithdrawalItem> {
+    const res = await apiClient.post<AdminWithdrawalItem>(
+      `/admin/withdrawals/${id}/reject`,
+      reason ? { reason } : {},
     );
     return res.data;
   },

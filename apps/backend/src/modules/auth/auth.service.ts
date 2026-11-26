@@ -8,9 +8,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { UserStatus } from '../../generated/prisma';
+import { NotificationType, UserStatus } from '../../generated/prisma';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { type AuthenticatedUser } from '../../common';
 import {
   JwtRefreshPayload,
   UserInfo,
@@ -22,6 +21,8 @@ import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AuthSettingsService } from './auth-settings.service';
+import { verifyTotpCode } from './totp.helper';
 import ms, { type StringValue } from 'ms';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -37,6 +38,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly settingsService: AuthSettingsService,
   ) {
     this.accessTokenExpiresIn = this.config.getOrThrow<StringValue>(
       'JWT_ACCESS_EXPIRES_IN',
@@ -67,7 +69,13 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.password, this.bcryptSaltRounds);
     const user = await this.prisma.user.create({
       data: { email: dto.email, passwordHash, fullName: dto.fullName ?? null },
-      select: { id: true, email: true, role: true, fullName: true },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        fullName: true,
+        twoFactorEnabled: true,
+      },
     });
 
     return this._createSessionAndIssueTokens(user);
@@ -92,6 +100,21 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (user.twoFactorEnabled) {
+      if (!user.twoFactorSecret) {
+        throw new ForbiddenException('2FA configuration is invalid');
+      }
+      if (!dto.totpCode?.trim()) {
+        throw new UnauthorizedException({
+          code: 'TWO_FACTOR_REQUIRED',
+          message: 'Two-factor authentication code is required',
+        });
+      }
+      if (!verifyTotpCode(user.twoFactorSecret, dto.totpCode)) {
+        throw new UnauthorizedException('Invalid 2FA verification code');
+      }
+    }
+
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
@@ -102,6 +125,7 @@ export class AuthService {
       email: user.email,
       role: user.role,
       fullName: user.fullName,
+      twoFactorEnabled: user.twoFactorEnabled,
     });
   }
 
@@ -145,6 +169,7 @@ export class AuthService {
         role: true,
         fullName: true,
         status: true,
+        twoFactorEnabled: true,
       },
     });
     if (user.status === UserStatus.LOCKED) {
@@ -153,7 +178,6 @@ export class AuthService {
 
     const tokens = await this._generateTokens(user);
 
-    // Sử dụng transaction để đảm bảo tính toàn vẹn dữ liệu khi thu hồi session cũ và tạo session mới
     await this.prisma.$transaction(async (tx) => {
       await tx.session.update({
         where: { id: session.id },
@@ -178,6 +202,7 @@ export class AuthService {
         email: user.email,
         role: user.role,
         fullName: user.fullName,
+        twoFactorEnabled: user.twoFactorEnabled,
       },
     };
   }
@@ -199,6 +224,7 @@ export class AuthService {
         fullName: true,
         role: true,
         status: true,
+        twoFactorEnabled: true,
         createdAt: true,
         lastLoginAt: true,
       },
@@ -210,6 +236,7 @@ export class AuthService {
       fullName: user.fullName,
       role: user.role,
       status: user.status,
+      twoFactorEnabled: user.twoFactorEnabled,
       createdAt: user.createdAt,
       lastLoginAt: user.lastLoginAt,
     };
@@ -251,6 +278,13 @@ export class AuthService {
       data: { passwordHash },
     });
 
+    await this.settingsService.recordNotification(
+      userId,
+      NotificationType.SECURITY,
+      'Mật khẩu đã được thay đổi',
+      'Mật khẩu tài khoản của bạn vừa được cập nhật thành công.',
+    );
+
     return { message: 'Password changed successfully' };
   }
 
@@ -266,6 +300,7 @@ export class AuthService {
         fullName: true,
         role: true,
         status: true,
+        twoFactorEnabled: true,
         createdAt: true,
         lastLoginAt: true,
       },
@@ -278,75 +313,12 @@ export class AuthService {
       fullName: updated.fullName,
       role: updated.role,
       status: updated.status,
+      twoFactorEnabled: updated.twoFactorEnabled,
       createdAt: updated.createdAt,
       lastLoginAt: updated.lastLoginAt,
     };
   }
 
-  async getActiveSessions(userId: string, currentSessionId?: string) {
-    const sessions = await this.prisma.session.findMany({
-      where: {
-        userId,
-        revokedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        createdAt: true,
-        expiresAt: true,
-      },
-    });
-
-    return sessions.map((s) => ({
-      id: s.id,
-      createdAt: s.createdAt,
-      expiresAt: s.expiresAt,
-      isCurrent: s.id === currentSessionId,
-    }));
-  }
-
-  async revokeSession(
-    userId: string,
-    sessionId: string,
-  ): Promise<{ message: string }> {
-    const session = await this.prisma.session.findFirst({
-      where: { id: sessionId, userId, revokedAt: null },
-    });
-    if (!session) {
-      throw new UnprocessableEntityException(
-        'Session not found or already revoked',
-      );
-    }
-
-    await this.prisma.session.update({
-      where: { id: sessionId },
-      data: { revokedAt: new Date() },
-    });
-
-    return { message: 'Session revoked successfully' };
-  }
-
-  async revokeAllOtherSessions(
-    userId: string,
-    currentSessionId: string,
-  ): Promise<{ message: string; count: number }> {
-    const result = await this.prisma.session.updateMany({
-      where: {
-        userId,
-        id: { not: currentSessionId },
-        revokedAt: null,
-      },
-      data: { revokedAt: new Date() },
-    });
-
-    return {
-      message: 'All other sessions revoked successfully',
-      count: result.count,
-    };
-  }
-
-  // xử lý database
   private async _createSessionAndIssueTokens(
     user: UserInfo,
   ): Promise<TokensResponse> {
@@ -368,7 +340,6 @@ export class AuthService {
     };
   }
 
-  // tính toán
   private async _generateTokens(user: UserInfo): Promise<GeneratedTokens> {
     const expiresAt = new Date(Date.now() + ms(this.refreshTokenExpiresIn));
 

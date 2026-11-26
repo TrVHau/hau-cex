@@ -1,37 +1,49 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Decimal from 'decimal.js';
 import {
   BarChart2,
   Globe,
   Zap,
   TrendingUp,
-  TrendingDown,
   Star,
   Search,
   Filter,
   ShieldCheck,
   CheckCircle2,
+  X,
 } from 'lucide-react';
-import { useMarkets } from '../hooks/useApi';
-import { Button, Badge, Spinner } from '../components/ui';
+import { useMarkets, useFavoriteMarkets } from '../hooks/useApi';
+import { Button, Badge, Spinner, PairIcon } from '../components/ui';
 import { formatPrice } from '../lib/utils';
 
 export function MarketListPage() {
   const navigate = useNavigate();
   const { data: markets = [], isLoading, isError } = useMarkets();
   const [activeTab, setActiveTab] = useState<'ALL' | 'USDT' | 'BTC' | 'FAVORITES'>('ALL');
+  const [onlyReady, setOnlyReady] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [favorites, setFavorites] = useState<string[]>(['BTC_USDT']);
+  const [showGlobalModal, setShowGlobalModal] = useState(false);
+  const [showPolicyModal, setShowPolicyModal] = useState(false);
+  const { favorites, toggleFavorite } = useFavoriteMarkets();
 
-  const toggleFavorite = (symbol: string) => {
-    if (favorites.includes(symbol)) {
-      setFavorites(favorites.filter((s) => s !== symbol));
-    } else {
-      setFavorites([...favorites, symbol]);
+  const readyMarketsCount = markets.filter((m) => m.status === 'READY' || m.status === 'OPEN').length;
+  const quotedMarketsCount = markets.filter((m) => Boolean(m.lastPrice ?? m.ticker?.lastPrice)).length;
+  const pausedMarketsCount = markets.length - readyMarketsCount;
+  let total24hVolUsdt = new Decimal(0);
+  markets.forEach((m) => {
+    const v = m.ticker?.quoteVolume24h ?? m.ticker?.volume24h;
+    if (v && m.quoteAsset === 'USDT') {
+      try {
+        total24hVolUsdt = total24hVolUsdt.add(new Decimal(v));
+      } catch {
+        // ignore
+      }
     }
-  };
+  });
 
   const filteredMarkets = markets.filter((m) => {
+    if (onlyReady && m.status !== 'READY' && m.status !== 'OPEN') return false;
     const matchesSearch =
       m.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.baseAsset.toLowerCase().includes(searchQuery.toLowerCase());
@@ -57,7 +69,12 @@ export function MarketListPage() {
           </p>
         </div>
         <div className="flex items-center gap-2.5">
-          <Button variant="secondary" size="sm" className="text-xs">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowGlobalModal(true)}
+            className="text-xs"
+          >
             <Globe className="w-3.5 h-3.5 text-[#848e9c]" />
             Global Data
           </Button>
@@ -73,39 +90,40 @@ export function MarketListPage() {
         </div>
       </div>
 
-      {/* Top 4 Stat Cards */}
+      {/* Top 4 Stat Cards (Real aggregated market metrics) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
             <span className="flex items-center gap-1.5">
               <TrendingUp className="w-3.5 h-3.5 text-[#5e6673]" />
-              24H VOLUME
+              24H USDT VOLUME
             </span>
-            <span className="text-[11px] text-[#0ecb81] font-semibold">+12.5%</span>
           </div>
-          <div className="text-xl font-bold text-white font-numeric mt-2">$14.2B</div>
+          <div className="text-xl font-bold text-white font-numeric mt-2">
+            ${total24hVolUsdt.toFixed(2)}
+          </div>
         </div>
 
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
             <span className="flex items-center gap-1.5">
               <Globe className="w-3.5 h-3.5 text-[#5e6673]" />
-              GLOBAL MARKET CAP
+              QUOTED PAIRS
             </span>
-            <span className="text-[11px] text-[#0ecb81] font-semibold">+0.8%</span>
           </div>
-          <div className="text-xl font-bold text-white font-numeric mt-2">$2.45T</div>
+          <div className="text-xl font-bold text-white font-numeric mt-2">
+            {quotedMarketsCount} / {markets.length}
+          </div>
         </div>
 
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#848e9c]">
             <span className="flex items-center gap-1.5">
-              <TrendingDown className="w-3.5 h-3.5 text-[#5e6673]" />
-              BTC DOMINANCE
+              <Zap className="w-3.5 h-3.5 text-[#5e6673]" />
+              PAUSED / RECOVERING
             </span>
-            <span className="text-[11px] text-[#f6465d] font-semibold">-0.2%</span>
           </div>
-          <div className="text-xl font-bold text-white font-numeric mt-2">52.4%</div>
+          <div className="text-xl font-bold text-white font-numeric mt-2">{pausedMarketsCount}</div>
         </div>
 
         <div className="bg-[#14171d] border border-[#232933] rounded-xl p-4 flex flex-col justify-between">
@@ -114,9 +132,11 @@ export function MarketListPage() {
               <Zap className="w-3.5 h-3.5 text-[#5e6673]" />
               ACTIVE PAIRS
             </span>
-            <span className="text-[11px] text-[#0ecb81] font-semibold">+4</span>
+            <span className="text-[11px] text-[#0ecb81] font-semibold">
+              {readyMarketsCount} ready
+            </span>
           </div>
-          <div className="text-xl font-bold text-white font-numeric mt-2">{markets.length || 482}</div>
+          <div className="text-xl font-bold text-white font-numeric mt-2">{markets.length}</div>
         </div>
       </div>
 
@@ -153,8 +173,18 @@ export function MarketListPage() {
                 className="bg-[#1b2028] border border-[#282f3c] focus:border-[#f5b642] rounded-lg py-1.5 pl-8 pr-3 text-xs text-[#eaecef] placeholder-[#5e6673] outline-none transition-colors w-60"
               />
             </div>
-            <button className="p-2 rounded-lg bg-[#1b2028] border border-[#282f3c] text-[#848e9c] hover:text-[#eaecef] cursor-pointer">
+            <button
+              type="button"
+              onClick={() => setOnlyReady((v) => !v)}
+              title="Lọc chỉ hiện các cặp READY"
+              className={`px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer inline-flex items-center gap-1.5 ${
+                onlyReady
+                  ? 'bg-[#f5b642]/15 border-[#f5b642] text-[#f5b642]'
+                  : 'bg-[#1b2028] border-[#282f3c] text-[#848e9c] hover:text-[#eaecef]'
+              }`}
+            >
               <Filter className="w-3.5 h-3.5" />
+              <span>{onlyReady ? 'READY ONLY' : 'ALL STATUS'}</span>
             </button>
           </div>
         </div>
@@ -194,8 +224,13 @@ export function MarketListPage() {
                 ) : (
                   filteredMarkets.map((m) => {
                     const ticker = m.ticker;
-                    const change = parseFloat(ticker?.priceChange24h ?? '2.45');
-                    const isPositive = change >= 0;
+                    const lastPrice = m.lastPrice ?? ticker?.lastPrice;
+                    const bestBid = m.bestBid ?? ticker?.bestBid;
+                    const bestAsk = m.bestAsk ?? ticker?.bestAsk;
+                    const rawChange = ticker?.priceChange24h;
+                    const change =
+                      rawChange !== null && rawChange !== undefined ? parseFloat(rawChange) : null;
+                    const isPositive = change !== null && change >= 0;
                     const isFav = favorites.includes(m.symbol);
 
                     return (
@@ -214,9 +249,7 @@ export function MarketListPage() {
                         </td>
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-7 h-7 rounded-full bg-[#1e232d] border border-[#2b3240] flex items-center justify-center font-bold text-xs text-[#f5b642]">
-                              {m.baseAsset.slice(0, 1)}
-                            </div>
+                            <PairIcon baseAsset={m.baseAsset} quoteAsset={m.quoteAsset} size="md" />
                             <div>
                               <div className="font-bold text-white text-xs">
                                 {m.baseAsset}/{m.quoteAsset}
@@ -226,28 +259,38 @@ export function MarketListPage() {
                           </div>
                         </td>
                         <td className="py-3.5 px-4 text-right font-numeric font-bold text-white text-sm">
-                          {ticker?.lastPrice ? formatPrice(ticker.lastPrice, m.tickSize) : '64,231.50'}
+                          {lastPrice ? formatPrice(lastPrice, m.tickSize) : '—'}
                         </td>
                         <td className="py-3.5 px-4 text-right font-numeric font-semibold">
-                          <span className={isPositive ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
-                            {isPositive ? '+' : ''}
-                            {change.toFixed(2)}%
-                          </span>
+                          {change === null || Number.isNaN(change) ? (
+                            <span className="text-[#848e9c]">—</span>
+                          ) : (
+                            <span className={isPositive ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
+                              {isPositive ? '+' : ''}
+                              {change.toFixed(2)}%
+                            </span>
+                          )}
                         </td>
                         <td className="py-3.5 px-4 text-right font-numeric text-[#0ecb81] hidden sm:table-cell">
-                          {ticker?.bestBid ? formatPrice(ticker.bestBid, m.tickSize) : '64,228.00'}
+                          {bestBid ? formatPrice(bestBid, m.tickSize) : '—'}
                         </td>
                         <td className="py-3.5 px-4 text-right font-numeric text-[#f6465d] hidden sm:table-cell">
-                          {ticker?.bestAsk ? formatPrice(ticker.bestAsk, m.tickSize) : '64,235.00'}
+                          {bestAsk ? formatPrice(bestAsk, m.tickSize) : '—'}
                         </td>
                         <td className="py-3.5 px-4 text-right font-numeric text-[#848e9c] hidden md:table-cell">
-                          {ticker?.volume24h ? `${parseFloat(ticker.volume24h).toFixed(2)}M` : '1.24B'}
+                          {ticker?.volume24h && !Number.isNaN(parseFloat(ticker.volume24h))
+                            ? `${parseFloat(ticker.volume24h).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${m.quoteAsset}`
+                            : '—'}
                         </td>
                         <td className="py-3.5 px-4 text-right hidden lg:table-cell">
-                          {m.status === 'OPEN' ? (
-                            <Badge variant="green" size="sm">OPEN</Badge>
+                          {m.status === 'READY' || m.status === 'OPEN' ? (
+                            <Badge variant="green" size="sm">READY</Badge>
+                          ) : m.status === 'RECOVERING' ? (
+                            <Badge variant="yellow" size="sm">RECOVERING</Badge>
                           ) : (
-                            <Badge variant="yellow" size="sm">SUSPENDED</Badge>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-[#f6465d]/15 text-[#f6465d]">
+                              {m.status}
+                            </span>
                           )}
                         </td>
                         <td className="py-3.5 px-4 text-right">
@@ -270,43 +313,41 @@ export function MarketListPage() {
         )}
       </div>
 
-      {/* Bottom Information Panels: Market Sentiment & Safety First */}
+      {/* Bottom Information Panels: Market Fee Schedule & Safety First */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* Market Sentiment & Analysis */}
+        {/* Market Precision & Fee Schedule */}
         <div className="lg:col-span-8 bg-[#14171d] border border-[#232933] rounded-xl p-5 flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-2 text-sm font-bold text-white mb-1">
               <TrendingUp className="w-4 h-4 text-[#f5b642]" />
-              Market Sentiment & Analysis
+              Exchange Precision &amp; Fee Schedule
             </div>
-            <p className="text-xs text-[#848e9c]">Based on last 24h trading activity and social signals.</p>
+            <p className="text-xs text-[#848e9c]">Live trading rules and fees configured per trading pair.</p>
 
-            <div className="mt-5 space-y-4">
-              <div>
-                <div className="flex justify-between text-xs mb-1.5">
-                  <span className="text-[#848e9c]">FEAR & GREED INDEX</span>
-                  <span className="text-[#0ecb81] font-bold font-numeric">GREED (74)</span>
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 font-numeric text-xs">
+              {markets.slice(0, 4).map((m) => (
+                <div
+                  key={m.id}
+                  onClick={() => navigate(`/trade/${m.symbol}`)}
+                  className="p-3 bg-[#1b2028] rounded-lg border border-[#282f3c] hover:border-[#f5b642]/50 cursor-pointer space-y-1"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-sans font-bold text-white">{m.baseAsset}/{m.quoteAsset}</span>
+                    <span className="text-[#0ecb81] font-semibold">
+                      Maker {(Number(m.makerFeeRate || 0) * 100).toFixed(2)}% / Taker {(Number(m.takerFeeRate || 0) * 100).toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#848e9c] flex justify-between">
+                    <span>Tick: {m.tickSize}</span>
+                    <span>Min Qty: {m.minOrderQty}</span>
+                  </div>
                 </div>
-                <div className="w-full h-2 rounded-full bg-[#1b2028] overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-[#f6465d] via-[#f5b642] to-[#0ecb81] w-3/4 rounded-full" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 pt-2">
-                <div className="p-3 bg-[#1b2028] rounded-lg border border-[#282f3c] flex items-center justify-between">
-                  <span className="text-xs text-[#848e9c]">Net Buy Volume</span>
-                  <span className="text-xs font-bold text-[#0ecb81] font-numeric">+$242.5M</span>
-                </div>
-                <div className="p-3 bg-[#1b2028] rounded-lg border border-[#282f3c] flex items-center justify-between">
-                  <span className="text-xs text-[#848e9c]">Net Sell Volume</span>
-                  <span className="text-xs font-bold text-[#f6465d] font-numeric">-$120.1M</span>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
 
           <div className="text-[11px] text-[#5e6673] mt-4 pt-3 border-t border-[#1c212a]">
-            Market momentum remains strong with BTC leading. Institutional inflows are holding steady.
+            Tất cả dữ liệu độ chính xác &amp; phí giao dịch được đồng bộ trực tiếp từ Backend Market Registry.
           </div>
         </div>
 
@@ -333,11 +374,80 @@ export function MarketListPage() {
             </ul>
           </div>
 
-          <Button variant="secondary" size="sm" className="w-full mt-4 text-xs font-semibold">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowPolicyModal(true)}
+            className="w-full mt-4 text-xs font-semibold"
+          >
             TRADING POLICY
           </Button>
         </div>
       </div>
+
+      {/* Global Data Modal */}
+      {showGlobalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-[#14171d] border border-[#232933] rounded-xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#232933] pb-3">
+              <div className="text-sm font-bold text-white flex items-center gap-2">
+                <Globe className="w-4 h-4 text-[#f5b642]" />
+                HAU-CEX Exchange Overview
+              </div>
+              <button type="button" onClick={() => setShowGlobalModal(false)} className="text-[#848e9c] hover:text-white cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2.5 text-xs font-numeric">
+              <div className="flex justify-between p-2.5 bg-[#1b2028] rounded-lg">
+                <span className="text-[#848e9c] font-sans">Tổng số cặp niêm yết</span>
+                <span className="text-white font-bold">{markets.length}</span>
+              </div>
+              <div className="flex justify-between p-2.5 bg-[#1b2028] rounded-lg">
+                <span className="text-[#848e9c] font-sans">Cặp đang hoạt động (READY)</span>
+                <span className="text-[#0ecb81] font-bold">{readyMarketsCount}</span>
+              </div>
+              <div className="flex justify-between p-2.5 bg-[#1b2028] rounded-lg">
+                <span className="text-[#848e9c] font-sans">Tạm dừng / Phục hồi</span>
+                <span className="text-[#f5b642] font-bold">{pausedMarketsCount}</span>
+              </div>
+              <div className="flex justify-between p-2.5 bg-[#1b2028] rounded-lg">
+                <span className="text-[#848e9c] font-sans">Tổng khối lượng 24H (USDT pairs)</span>
+                <span className="text-white font-bold">${total24hVolUsdt.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="primary" size="sm" onClick={() => setShowGlobalModal(false)}>Đóng</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trading Policy Modal */}
+      {showPolicyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-[#14171d] border border-[#232933] rounded-xl w-full max-w-lg p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#232933] pb-3">
+              <div className="text-sm font-bold text-white flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-[#f5b642]" />
+                HAU-CEX Spot Trading Policy
+              </div>
+              <button type="button" onClick={() => setShowPolicyModal(false)} className="text-[#848e9c] hover:text-white cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <ul className="text-xs text-[#848e9c] space-y-2 leading-relaxed">
+              <li>• <strong className="text-white">Loại lệnh hỗ trợ:</strong> Limit Order khớp theo nguyên tắc Price-Time Priority (FIFO ở từng mức giá).</li>
+              <li>• <strong className="text-white">Khóa số dư (Order Lock):</strong> Đặt lệnh Mua khóa Quote asset (`price × quantity`); đặt lệnh Bán khóa Base asset (`quantity`).</li>
+              <li>• <strong className="text-white">Độ chính xác:</strong> Giá phải chia hết cho `tickSize`; khối lượng phải chia hết cho `stepSize` và &ge; `minOrderQty`.</li>
+              <li>• <strong className="text-white">Huỷ lệnh:</strong> Lệnh `PENDING`, `OPEN`, `PARTIALLY_FILLED` khi huỷ sẽ hoàn phần số dư còn lại về ví Available.</li>
+            </ul>
+            <div className="flex justify-end">
+              <Button variant="primary" size="sm" onClick={() => setShowPolicyModal(false)}>Đã hiểu</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

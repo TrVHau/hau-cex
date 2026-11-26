@@ -1,7 +1,10 @@
-import { config } from 'dotenv';
-import { resolve } from 'path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-config({ path: resolve(__dirname, '../.env') });
+const rootEnvPath = resolve(__dirname, '../.env');
+if (existsSync(rootEnvPath)) {
+  process.loadEnvFile(rootEnvPath);
+}
 
 const API_BASE_URL = process.env.API_URL || 'http://localhost:3000/api/v1';
 
@@ -30,8 +33,8 @@ async function cancelForBot(email: string) {
     const chunk = activeOrders.slice(i, i + chunkSize);
     await Promise.all(
       chunk.map((o: any) =>
-        fetch(`${API_BASE_URL}/orders/${o.orderId}`, {
-          method: 'DELETE',
+        fetch(`${API_BASE_URL}/orders/${o.orderId}/cancel`, {
+          method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         })
       )

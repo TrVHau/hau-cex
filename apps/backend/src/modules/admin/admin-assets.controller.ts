@@ -12,28 +12,28 @@ import {
 import { CursorPaginationQueryDto, Roles, RolesGuard } from '../../common';
 import { UserRole } from '../../generated/prisma';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { AdminService } from './admin.service';
+import { AdminAssetsService } from './admin-assets.service';
 
 @Controller('admin/assets')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class AdminAssetsController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(private readonly adminAssetsService: AdminAssetsService) {}
 
   @Get()
   listAssets(@Query() query: CursorPaginationQueryDto) {
-    return this.adminService.listAssets(query.cursor, query.limit);
+    return this.adminAssetsService.listAssets(query.cursor, query.limit);
   }
 
   @Post(':assetId/activate')
   @HttpCode(HttpStatus.OK)
   activateAsset(@Param('assetId', ParseUUIDPipe) assetId: string) {
-    return this.adminService.activateAsset(assetId);
+    return this.adminAssetsService.activateAsset(assetId);
   }
 
   @Post(':assetId/deactivate')
   @HttpCode(HttpStatus.OK)
   deactivateAsset(@Param('assetId', ParseUUIDPipe) assetId: string) {
-    return this.adminService.deactivateAsset(assetId);
+    return this.adminAssetsService.deactivateAsset(assetId);
   }
 }

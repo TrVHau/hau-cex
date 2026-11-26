@@ -5,6 +5,7 @@ export interface UserInfo {
   email: string;
   role: UserRole;
   fullName: string | null;
+  twoFactorEnabled?: boolean;
 }
 
 export interface GeneratedTokens {

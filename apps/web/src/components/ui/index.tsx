@@ -217,3 +217,5 @@ export function LoadingPage() {
     </div>
   );
 }
+
+export { CoinIcon, PairIcon } from './CoinIcon';
